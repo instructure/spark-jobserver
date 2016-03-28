@@ -219,7 +219,7 @@ object JobServerBuild extends Build {
 
   lazy val publishSettings = bintrayPublishSettings ++ Seq(
     licenses += ("Apache-2.0", url("http://choosealicense.com/licenses/apache/")),
-    bintray.Keys.bintrayOrganization in bintray.Keys.bintray := Some("spark-jobserver")
+    bintray.Keys.bintrayOrganization in bintray.Keys.bintray := Some("addisonj")
   )
 
   // change to scalariformSettings for auto format on compile; defaultScalariformSettings to disable
