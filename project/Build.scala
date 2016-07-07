@@ -143,8 +143,8 @@ object JobServerBuild extends Build {
       }
     },
     imageNames in docker := Seq(
-      sbtdocker.ImageName(namespace = Some("velvia"),
-                          repository = "spark-jobserver",
+      sbtdocker.ImageName(namespace = Some("323604001645.dkr.ecr.us-east-1.amazonaws.com/pandata"),
+                          repository = "sjs",
                           tag = Some(s"${version.value}.mesos-${mesosVersion.split('-')(0)}.spark-${sparkVersion}"))
     )
   )
