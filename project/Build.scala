@@ -2,7 +2,7 @@ import scalariform.formatter.preferences._
 
 import sbt._
 import Keys._
-import bintray.BintrayKeys._
+import bintray.Plugin.bintrayPublishSettings
 import com.typesafe.sbt.SbtScalariform._
 import com.typesafe.sbt.SbtScalariform
 import sbtassembly.AssemblyPlugin.autoImport._
@@ -239,9 +239,9 @@ object JobServerBuild extends Build {
     coverageExcludedPackages := ".+Benchmark.*"
   }
 
-  lazy val publishSettings = Seq(
+  lazy val publishSettings = bintrayPublishSettings ++ Seq(
     licenses += ("Apache-2.0", url("http://choosealicense.com/licenses/apache/")),
-    bintrayOrganization := Some("addisonj")
+    bintray.Keys.bintrayOrganization in bintray.Keys.bintray := Some("instructure-data")
   )
 
   // change to scalariformSettings for auto format on compile; defaultScalariformSettings to disable
