@@ -15,8 +15,6 @@ object Dependencies {
   )
 
   lazy val akkaDeps = Seq(
-    // Akka is provided because Spark already includes it, and Spark's version is shaded so it's not safe
-    // to use this one
     "com.typesafe.akka" %% "akka-slf4j" % akka,
     "com.typesafe.akka" %% "akka-cluster" % akka exclude("com.typesafe.akka", "akka-remote"),
     "io.spray" %% "spray-json" % sprayJson,
