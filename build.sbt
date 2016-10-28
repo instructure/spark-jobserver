@@ -1,6 +1,7 @@
 
 import Dependencies._
 import JobServerRelease._
+import bintray.Plugin.bintrayPublishSettings
 
 transitiveClassifiers in Global := Seq()
 lazy val dirSettings = Seq()
@@ -263,9 +264,9 @@ lazy val scoverageSettings = {
   coverageExcludedPackages := ".+Benchmark.*"
 }
 
-lazy val publishSettings = Seq(
+lazy val publishSettings = bintrayPublishSettings ++ Seq(
   licenses += ("Apache-2.0", url("http://choosealicense.com/licenses/apache/")),
-  bintrayOrganization := Some("spark-jobserver")
+  bintray.Keys.bintrayOrganization in bintray.Keys.bintray := Some("instructure-data")
 )
 
 // This is here so we can easily switch back to Logback when Spark fixes its log4j dependency.
