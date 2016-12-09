@@ -10,6 +10,7 @@ import akka.util.Timeout
 import com.typesafe.config.{Config, ConfigFactory}
 
 import spark.jobserver.common.akka.InstrumentedActor
+import spark.jobserver.JobManagerActor.{GetSparkWebUIUrl, NoSparkWebUI, SparkWebUIUrl}
 import spark.jobserver.JobManagerActor.{SparkContextAlive, SparkContextDead, SparkContextStatus}
 
 /** Messages common to all ContextSupervisors */
@@ -22,6 +23,7 @@ object ContextSupervisor {
   case class GetContext(name: String) // returns JobManager, JobResultActor
   case class GetResultActor(name: String)  // returns JobResultActor
   case class StopContext(name: String, retry: Boolean = true)
+  case class GetSparkWebUI(name: String)
 
   // Errors/Responses
   case object ContextInitialized
@@ -29,6 +31,7 @@ object ContextSupervisor {
   case object ContextAlreadyExists
   case object NoSuchContext
   case object ContextStopped
+  case class WebUIForContext(name: String, url: Option[String])
 }
 
 /**
@@ -66,6 +69,24 @@ abstract class BaseSupervisorActor extends InstrumentedActor {
 
     case ListContexts =>
       sender ! listContexts()
+
+    case GetSparkWebUI(name) =>
+      if (haveContext(name)) {
+        val actorOpt = getContext(name)._2
+        if (actorOpt.isDefined) {
+          val future = (actorOpt.get ? GetSparkWebUIUrl)(getTimeout().seconds)
+          val originator = sender
+          future.collect {
+            case SparkWebUIUrl(webUi) => originator ! WebUIForContext(name, Some(webUi))
+            case NoSparkWebUI => originator ! WebUIForContext(name, None)
+            case SparkContextDead =>
+              logger.info("SparkContext {} is dead", name)
+              originator ! NoSuchContext
+          }
+        }
+      } else {
+        sender ! NoSuchContext
+      }
 
     case AddContext(name, contextConfig) =>
       val originator = sender()

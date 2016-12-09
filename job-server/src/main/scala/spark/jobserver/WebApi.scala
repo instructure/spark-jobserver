@@ -318,6 +318,7 @@ class WebApi(system: ActorSystem,
   /**
    * Routes for listing, adding, and stopping contexts
    *     GET /contexts         - lists all current contexts
+   *     GET /contexts/<contextName> - returns some info about the context (such as spark UI url)
    *     POST /contexts/<contextName> - creates a new context
    *     DELETE /contexts/<contextName> - stops a context and all jobs running in it
    */
@@ -326,6 +327,22 @@ class WebApi(system: ActorSystem,
 
     // user authentication
     authenticate(authenticator) { authInfo =>
+      (get & path(Segment)) { (contextName) =>
+        respondWithMediaType(MediaTypes.`application/json`) { ctx =>
+          val future = supervisor ? GetSparkWebUI(contextName)
+          future.map {
+            case WebUIForContext(name, Some(url)) => ctx.complete(
+              200,
+              Map("context" -> contextName, "url" -> url)
+            )
+            case WebUIForContext(name, None) => ctx.complete(200, Map("context" -> contextName))
+            case NoSuchContext => ctx.complete(404, s"can't find context with name $contextName")
+
+          }.recover {
+            case e: Exception => ctx.complete(500, errMap(e, "ERROR"))
+          }
+        }
+      } ~
       get { ctx =>
         (supervisor ? ListContexts).mapTo[Seq[String]]
           .map { contexts =>
@@ -368,51 +385,51 @@ class WebApi(system: ActorSystem,
           }
         }
       } ~
-        delete {
-          //  DELETE /contexts/<contextName>
-          //  Stop the context with the given name.  Executors will be shut down and all cached RDDs
-          //  and currently running jobs will be lost.  Use with care!
-          path(Segment) { (contextName) =>
-            val (cName, _) = determineProxyUser(config, authInfo, contextName)
-            val future = supervisor ? StopContext(cName)
-            respondWithMediaType(MediaTypes.`text/plain`) { ctx =>
-              future.map {
-                case ContextStopped => ctx.complete(StatusCodes.OK)
-                case NoSuchContext  => notFound(ctx, "context " + contextName + " not found")
-              }
-            }
-          }
-        } ~
-        put {
-          parameter("reset") { reset =>
-            respondWithMediaType(MediaTypes.`text/plain`) { ctx =>
-              reset match {
-                case "reboot" => {
-                  import ContextSupervisor._
-                  import collection.JavaConverters._
-                  import java.util.concurrent.TimeUnit
-
-                  logger.warn("refreshing contexts")
-                  val future = (supervisor ? ListContexts).mapTo[Seq[String]]
-                  val lookupTimeout = Try(config.getDuration("spark.jobserver.context-lookup-timeout",
-                    TimeUnit.MILLISECONDS).toInt / 1000).getOrElse(1)
-                  val contexts = Await.result(future, lookupTimeout.seconds).asInstanceOf[Seq[String]]
-
-                  val stopFutures = contexts.map(c => supervisor ? StopContext(c))
-                  Await.ready(Future.sequence(stopFutures), contextTimeout.seconds)
-
-                  Thread.sleep(1000) // we apparently need some sleeping in here, so spark can catch up
-
-                  (supervisor ? AddContextsFromConfig).onFailure {
-                    case t => ctx.complete("ERROR")
-                  }
-                  ctx.complete(StatusCodes.OK)
-                }
-                case _ => ctx.complete("ERROR")
-              }
+      delete {
+        //  DELETE /contexts/<contextName>
+        //  Stop the context with the given name.  Executors will be shut down and all cached RDDs
+        //  and currently running jobs will be lost.  Use with care!
+        path(Segment) { (contextName) =>
+          val (cName, _) = determineProxyUser(config, authInfo, contextName)
+          val future = supervisor ? StopContext(cName)
+          respondWithMediaType(MediaTypes.`text/plain`) { ctx =>
+            future.map {
+              case ContextStopped => ctx.complete(StatusCodes.OK)
+              case NoSuchContext  => notFound(ctx, "context " + contextName + " not found")
             }
           }
         }
+      } ~
+      put {
+        parameter("reset") { reset =>
+          respondWithMediaType(MediaTypes.`text/plain`) { ctx =>
+            reset match {
+              case "reboot" => {
+                import ContextSupervisor._
+                import collection.JavaConverters._
+                import java.util.concurrent.TimeUnit
+
+                logger.warn("refreshing contexts")
+                val future = (supervisor ? ListContexts).mapTo[Seq[String]]
+                val lookupTimeout = Try(config.getDuration("spark.jobserver.context-lookup-timeout",
+                  TimeUnit.MILLISECONDS).toInt / 1000).getOrElse(1)
+                val contexts = Await.result(future, lookupTimeout.seconds).asInstanceOf[Seq[String]]
+
+                val stopFutures = contexts.map(c => supervisor ? StopContext(c))
+                Await.ready(Future.sequence(stopFutures), contextTimeout.seconds)
+
+                Thread.sleep(1000) // we apparently need some sleeping in here, so spark can catch up
+
+                (supervisor ? AddContextsFromConfig).onFailure {
+                  case t => ctx.complete("ERROR")
+                }
+                ctx.complete(StatusCodes.OK)
+              }
+              case _ => ctx.complete("ERROR")
+            }
+          }
+        }
+      }
     }
   }
 
@@ -695,10 +712,15 @@ class WebApi(system: ActorSystem,
     import ContextSupervisor._
     val msg =
       if (context.isDefined) {
-        GetContext(context.get)
+        Left(GetContext(context.get))
       } else {
-        StartAdHocContext(classPath, contextConfig)
+        Right(StartAdHocContext(classPath, contextConfig))
       }
+    handleGetManager(msg)
+  }
+
+  private def handleGetManager(msgContainer: Either[GetContext, StartAdHocContext]): Option[ActorRef] = {
+    val msg = msgContainer.left.getOrElse(msgContainer.right.get)
     val future = (supervisor ? msg)(contextTimeout.seconds)
     Await.result(future, contextTimeout.seconds) match {
       case (actorName: String, Some(manager: ActorRef), Some(resultActor: ActorRef)) => Some(manager)
