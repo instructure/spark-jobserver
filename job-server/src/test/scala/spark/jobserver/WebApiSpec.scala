@@ -120,6 +120,7 @@ with ScalatestRouteTest with HttpService with ScalaFutures with SprayJsonSupport
       }
 
 
+
       case ListBinaries(Some(BinaryType.Jar)) =>
         sender ! Map("demo1" -> (BinaryType.Jar, dt), "demo2" -> (BinaryType.Jar, dt.plusHours(1)))
 
@@ -195,6 +196,9 @@ with ScalatestRouteTest with HttpService with ScalaFutures with SprayJsonSupport
 
       case StoreJobConfig(_, _) => sender ! JobConfigStored
       case KillJob(jobId) => sender ! JobKilled(jobId, DateTime.now())
+
+      case GetSparkWebUI("context1") => sender ! WebUIForContext("context1", Some("http://spark:4040"))
+      case GetSparkWebUI("context2") => sender ! WebUIForContext("context1", None)
     }
   }
 
