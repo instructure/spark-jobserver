@@ -334,6 +334,7 @@ class WebApi(system: ActorSystem,
   /**
    * Routes for listing, adding, and stopping contexts
    *     GET /contexts         - lists all current contexts
+   *     GET /contexts/<contextName> - returns some info about the context (such as spark UI url)
    *     POST /contexts/<contextName> - creates a new context
    *     DELETE /contexts/<contextName> - stops a context and all jobs running in it
    */
@@ -342,6 +343,22 @@ class WebApi(system: ActorSystem,
 
     // user authentication
     authenticate(authenticator) { authInfo =>
+      (get & path(Segment)) { (contextName) =>
+        respondWithMediaType(MediaTypes.`application/json`) { ctx =>
+          val future = supervisor ? GetSparkWebUI(contextName)
+          future.map {
+            case WebUIForContext(name, Some(url)) => ctx.complete(
+              200,
+              Map("context" -> contextName, "url" -> url)
+            )
+            case WebUIForContext(name, None) => ctx.complete(200, Map("context" -> contextName))
+            case NoSuchContext => ctx.complete(404, s"can't find context with name $contextName")
+
+          }.recover {
+            case e: Exception => ctx.complete(500, errMap(e, "ERROR"))
+          }
+        }
+      } ~
       get { ctx =>
         (supervisor ? ListContexts).mapTo[Seq[String]]
           .map { contexts =>
@@ -426,11 +443,13 @@ class WebApi(system: ActorSystem,
                   }
                   ctx.complete(StatusCodes.OK, successMap("Context reset"))
                 }
-                case _ => ctx.complete("ERROR")
+                ctx.complete(StatusCodes.OK)
               }
+              case _ => ctx.complete("ERROR")
             }
           }
         }
+      }
     }
   }
 
@@ -708,10 +727,15 @@ class WebApi(system: ActorSystem,
     import ContextSupervisor._
     val msg =
       if (context.isDefined) {
-        GetContext(context.get)
+        Left(GetContext(context.get))
       } else {
-        StartAdHocContext(classPath, contextConfig)
+        Right(StartAdHocContext(classPath, contextConfig))
       }
+    handleGetManager(msg)
+  }
+
+  private def handleGetManager(msgContainer: Either[GetContext, StartAdHocContext]): Option[ActorRef] = {
+    val msg = msgContainer.left.getOrElse(msgContainer.right.get)
     val future = (supervisor ? msg)(contextTimeout.seconds)
     Await.result(future, contextTimeout.seconds) match {
       case (manager: ActorRef, resultActor: ActorRef) => Some(manager)
