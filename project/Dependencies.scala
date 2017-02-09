@@ -10,7 +10,8 @@ object Dependencies {
   lazy val miscDeps = Seq(
     "org.scalactic" %% "scalactic" % scalatic,
     "org.joda" % "joda-convert" % jodaConvert,
-    "joda-time" % "joda-time" % jodaTime
+    "joda-time" % "joda-time" % jodaTime,
+    "com.getsentry.raven" % "raven-log4j" % raven
   )
 
   lazy val akkaDeps = Seq(
