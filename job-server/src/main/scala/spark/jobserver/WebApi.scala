@@ -402,48 +402,46 @@ class WebApi(system: ActorSystem,
           }
         }
       } ~
-        delete {
-          //  DELETE /contexts/<contextName>
-          //  Stop the context with the given name.  Executors will be shut down and all cached RDDs
-          //  and currently running jobs will be lost.  Use with care!
-          path(Segment) { (contextName) =>
-            val (cName, _) = determineProxyUser(config, authInfo, contextName)
-            val future = supervisor ? StopContext(cName)
-            respondWithMediaType(MediaTypes.`application/json`) { ctx =>
-              future.map {
-                case ContextStopped => ctx.complete(StatusCodes.OK, successMap("Context stopped"))
-                case NoSuchContext  => notFound(ctx, "context " + contextName + " not found")
-                case ContextStopError(e) => ctx.complete(500, errMap(e, "CONTEXT DELETE ERROR"))
-              }
+      delete {
+        //  DELETE /contexts/<contextName>
+        //  Stop the context with the given name.  Executors will be shut down and all cached RDDs
+        //  and currently running jobs will be lost.  Use with care!
+        path(Segment) { (contextName) =>
+          val (cName, _) = determineProxyUser(config, authInfo, contextName)
+          val future = supervisor ? StopContext(cName)
+          respondWithMediaType(MediaTypes.`application/json`) { ctx =>
+            future.map {
+              case ContextStopped => ctx.complete(StatusCodes.OK, successMap("Context stopped"))
+              case NoSuchContext  => notFound(ctx, "context " + contextName + " not found")
+              case ContextStopError(e) => ctx.complete(500, errMap(e, "CONTEXT DELETE ERROR"))
             }
           }
-        } ~
-        put {
-          parameter("reset") { reset =>
-            respondWithMediaType(MediaTypes.`application/json`) { ctx =>
-              reset match {
-                case "reboot" => {
-                  import ContextSupervisor._
-                  import collection.JavaConverters._
-                  import java.util.concurrent.TimeUnit
+        }
+      } ~
+      put {
+        parameter("reset") { reset =>
+          respondWithMediaType(MediaTypes.`application/json`) { ctx =>
+            reset match {
+              case "reboot" => {
+                import ContextSupervisor._
+                import collection.JavaConverters._
+                import java.util.concurrent.TimeUnit
 
-                  logger.warn("refreshing contexts")
-                  val future = (supervisor ? ListContexts).mapTo[Seq[String]]
-                  val lookupTimeout = Try(config.getDuration("spark.jobserver.context-lookup-timeout",
-                    TimeUnit.MILLISECONDS).toInt / 1000).getOrElse(1)
-                  val contexts = Await.result(future, lookupTimeout.seconds).asInstanceOf[Seq[String]]
+                logger.warn("refreshing contexts")
+                val future = (supervisor ? ListContexts).mapTo[Seq[String]]
+                val lookupTimeout = Try(config.getDuration("spark.jobserver.context-lookup-timeout",
+                  TimeUnit.MILLISECONDS).toInt / 1000).getOrElse(1)
+                val contexts = Await.result(future, lookupTimeout.seconds).asInstanceOf[Seq[String]]
 
-                  val stopFutures = contexts.map(c => supervisor ? StopContext(c))
-                  Await.ready(Future.sequence(stopFutures), contextTimeout.seconds)
+                val stopFutures = contexts.map(c => supervisor ? StopContext(c))
+                Await.ready(Future.sequence(stopFutures), contextTimeout.seconds)
 
-                  Thread.sleep(1000) // we apparently need some sleeping in here, so spark can catch up
+                Thread.sleep(1000) // we apparently need some sleeping in here, so spark can catch up
 
-                  (supervisor ? AddContextsFromConfig).onFailure {
-                    case t => ctx.complete("ERROR")
-                  }
-                  ctx.complete(StatusCodes.OK, successMap("Context reset"))
+                (supervisor ? AddContextsFromConfig).onFailure {
+                  case t => ctx.complete("ERROR")
                 }
-                ctx.complete(StatusCodes.OK)
+                ctx.complete(StatusCodes.OK, successMap("Context reset"))
               }
               case _ => ctx.complete("ERROR")
             }
