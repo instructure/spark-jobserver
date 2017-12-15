@@ -20,6 +20,7 @@ import scala.concurrent.Await
 import akka.pattern.gracefulStop
 import org.joda.time.DateTime
 import org.slf4j.LoggerFactory
+import spark.jobserver.JobManagerActor.{GetSparkWebUIUrl, NoSparkWebUI, SparkContextDead, SparkWebUIUrl}
 import spark.jobserver.io.JobDAOActor.CleanContextJobInfos
 
 /**
@@ -107,6 +108,22 @@ class AkkaClusterSupervisorActor(daoActor: ActorRef, dataManagerActor: ActorRef)
         }
       }
 
+
+    case GetSparkWebUI(name) =>
+      import akka.pattern.ask
+      contexts.get(name) match {
+        case Some((actor, _)) =>
+          val future = (actor ? GetSparkWebUIUrl)(Timeout(contextInitTimeout.seconds))
+          val originator = sender
+          future.collect {
+            case SparkWebUIUrl(webUi) => originator ! WebUIForContext(name, Some(webUi))
+            case NoSparkWebUI => originator ! WebUIForContext(name, None)
+            case SparkContextDead =>
+              logger.info("SparkContext {} is dead", name)
+              originator ! NoSuchContext
+          }
+        case _ => sender ! NoSuchContext
+      }
 
     case AddContextsFromConfig =>
       addContextsFromConfig(config)
