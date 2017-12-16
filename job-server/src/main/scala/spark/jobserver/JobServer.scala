@@ -59,14 +59,17 @@ object JobServer {
     val driverMode = config.getString("spark.submit.deployMode")
     val contextPerJvm = config.getBoolean("spark.jobserver.context-per-jvm")
     val jobDaoClass = Class.forName(config.getString("spark.jobserver.jobdao"))
+    val isClusterMode = driverMode == "cluster"
 
     // ensure context-per-jvm is enabled
-    if (sparkMaster.startsWith("yarn") && !contextPerJvm) {
-      throw new InvalidConfiguration("YARN mode requires context-per-jvm")
-    } else if (sparkMaster.startsWith("mesos") && !contextPerJvm) {
-      throw new InvalidConfiguration("Mesos mode requires context-per-jvm")
-    } else if (driverMode == "cluster" && !contextPerJvm) {
-      throw new InvalidConfiguration("Cluster mode requires context-per-jvm")
+    if (isClusterMode) {
+      if (sparkMaster.startsWith("yarn") && !contextPerJvm) {
+        throw new InvalidConfiguration("YARN mode requires context-per-jvm")
+      } else if (sparkMaster.startsWith("mesos") && !contextPerJvm) {
+        throw new InvalidConfiguration("Mesos mode requires context-per-jvm")
+      } else if (!contextPerJvm) {
+        throw new InvalidConfiguration("Cluster mode requires context-per-jvm")
+      }
     }
 
     // Check if we are using correct DB backend when context-per-jvm is enabled.
