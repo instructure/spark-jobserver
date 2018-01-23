@@ -1,17 +1,15 @@
 package spark.jobserver
 
-import java.io.{File, IOException}
-import java.nio.charset.Charset
-import java.nio.file.{Files, Paths}
+import java.io.File
+import java.nio.file.Files
 
-import akka.actor.{ActorSystem, Address, AddressFromURIString, Props}
+import akka.actor.{ActorSystem, AddressFromURIString, Props}
 import akka.cluster.Cluster
 import com.typesafe.config.{Config, ConfigFactory, ConfigValueFactory}
 import spark.jobserver.common.akka.actor.Reaper.WatchMe
 import org.slf4j.LoggerFactory
 import spark.jobserver.common.akka.actor.ProductionReaper
 import spark.jobserver.io.{JobDAO, JobDAOActor}
-import scala.collection.JavaConverters._
 import scala.util.Try
 
 /**
@@ -43,18 +41,25 @@ object JobManager {
       .getOrElse("local[4]").toLowerCase()
     val deployMode = Try(systemConfig.getString("spark.submit.deployMode")).toOption
       .getOrElse("client").toLowerCase()
-    val config = if (deployMode == "cluster") {
-      logger.info("Cluster mode: Removing akka.remote.netty.tcp.hostname from config!")
+    val baseConfig = if (deployMode == "cluster") {
       logger.info("Cluster mode: Replacing spark.jobserver.sqldao.rootdir with container tmp dir.")
       val sqlDaoDir = Files.createTempDirectory("sqldao")
       val sqlDaoDirConfig = ConfigValueFactory.fromAnyRef(sqlDaoDir.toAbsolutePath.toString)
-      systemConfig.withoutPath("akka.remote.netty.tcp.hostname")
+      val sysConfig = systemConfig
                   .withValue("spark.jobserver.sqldao.rootdir", sqlDaoDirConfig)
+      if (sysConfig.hasPath("spark.jobserver.removeNettyHostname") &&
+        sysConfig.getBoolean("spark.jobserver.removeNettyHostname")) {
+        logger.info("Cluster mode: Removing akka.remote.netty.tcp.hostname from config!")
+        sysConfig.withoutPath("akka.remote.netty.tcp.hostname")
+      } else {
+        sysConfig
+      }
     } else {
       systemConfig
     }
+    val config = baseConfig.resolve()
 
-    val system = makeSystem(config.resolve())
+    val system = makeSystem(config)
     val clazz = Class.forName(config.getString("spark.jobserver.jobdao"))
     val ctor = clazz.getDeclaredConstructor(Class.forName("com.typesafe.config.Config"))
     val jobDAO = ctor.newInstance(config).asInstanceOf[JobDAO]
