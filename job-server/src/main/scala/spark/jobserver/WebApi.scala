@@ -670,8 +670,13 @@ class WebApi(system: ActorSystem,
                       }
                     }
                   } catch {
-                    case e: NoSuchElementException =>
+                    case e: ContextNotFoundException =>
                       complete(StatusCodes.NotFound, errMap("context " + contextOpt.get + " not found"))
+                    case e: ContextNotReadyException =>
+                      complete(
+                        StatusCodes.NotFound,
+                        errMap("context " + contextOpt.get + " is not yet initialized, try again later")
+                      )
                     case e: ConfigException =>
                       complete(StatusCodes.BadRequest, errMap("Cannot parse config: " + e.getMessage))
                     case e: Exception =>
@@ -716,8 +721,9 @@ class WebApi(system: ActorSystem,
       }
     val future = (supervisor ? msg)(contextTimeout.seconds)
     Await.result(future, contextTimeout.seconds) match {
-      case (manager: ActorRef, resultActor: ActorRef) => Some(manager)
-      case NoSuchContext => None
+      case (actorName: String, Some(manager: ActorRef), Some(resultActor: ActorRef)) => Some(manager)
+      case (actorName: String, None, None) => throw new ContextNotReadyException()
+      case NoSuchContext => throw new ContextNotFoundException()
       case ContextInitError(err) => throw new RuntimeException(err)
     }
   }

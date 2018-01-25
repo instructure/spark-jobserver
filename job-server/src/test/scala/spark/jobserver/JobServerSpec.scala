@@ -43,26 +43,6 @@ class JobServerSpec extends TestKit(JobServerSpec.system) with FunSpecLike with 
   implicit val timeout: Timeout = 3 seconds
 
   describe("Fails on invalid configuration") {
-    it("requires context-per-jvm in YARN mode") {
-      val configFileName = writeConfigFile(Map(
-        "spark.master " -> "yarn",
-        "spark.jobserver.context-per-jvm " -> false))
-
-      intercept[InvalidConfiguration] {
-        JobServer.start(Seq(configFileName).toArray, makeSupervisorSystem(_))
-      }
-    }
-
-    it("requires context-per-jvm in Mesos mode") {
-      val configFileName = writeConfigFile(Map(
-        "spark.master " -> "mesos://test:123",
-        "spark.jobserver.context-per-jvm " -> false))
-
-      intercept[InvalidConfiguration] {
-        JobServer.start(Seq(configFileName).toArray, makeSupervisorSystem(_))
-      }
-    }
-
     it("requires context-per-jvm in cluster mode") {
       val configFileName = writeConfigFile(Map(
         "spark.submit.deployMode " -> "cluster",

@@ -49,8 +49,9 @@ class JobManagerSpec extends FunSpecLike with Matchers with BeforeAndAfter {
   implicit val timeout: Timeout = 3 seconds
 
   describe("starting job manager") {
-    it ("removes akka.remote.netty.tcp.hostname from config cluster mode") {
+    it ("removes akka.remote.netty.tcp.hostname from config cluster mode whe") {
       val configFileName = writeConfigFile(Map(
+        "spark.jobserver.removeNettyHostname" -> true,
         "spark.submit.deployMode" -> "cluster",
         "akka.remote.netty.tcp.hostname" -> "test"
       ))

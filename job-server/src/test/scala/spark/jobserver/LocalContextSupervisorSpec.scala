@@ -2,7 +2,7 @@ package spark.jobserver
 
 import akka.actor._
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
-import com.typesafe.config.{ConfigFactory, ConfigValueFactory}
+import com.typesafe.config.{Config, ConfigFactory, ConfigValueFactory}
 import org.scalatest.{BeforeAndAfter, BeforeAndAfterAll, FunSpecLike, Matchers}
 import spark.jobserver.common.akka
 import spark.jobserver.common.akka.AkkaTestUtils
@@ -90,14 +90,18 @@ class LocalContextSupervisorSpec extends TestKit(LocalContextSupervisorSpec.syst
       supervisor ! AddContextsFromConfig
       Thread sleep 10000
       supervisor ! ListContexts
-      expectMsg(40 seconds, Seq("olap-demo"))
+      expectMsg(40.seconds, Seq("olap-demo"))
     }
 
     it("should create adhoc context") {
       supervisor ! StartAdHocContext("spark.jobserver.SleepJob", contextConfig)
-      expectMsgPF(10 seconds, "manager and result actors") {
-        case (manager: ActorRef, resultActor: ActorRef) =>
-          assert(manager.path.name.endsWith("spark.jobserver.SleepJob"))
+      expectMsgPF(10.seconds, "manager and result actors") {
+        case (name: String, Some(manager: ActorRef), Some(resultActor: ActorRef)) =>
+          manager ! GetContextConfig
+          expectMsgPF(10.seconds, "context config") {
+            case config: ContextConfig =>
+              assert(config.contextName.endsWith("spark.jobserver.SleepJob"))
+          }
       }
     }
 
@@ -106,10 +110,15 @@ class LocalContextSupervisorSpec extends TestKit(LocalContextSupervisorSpec.syst
         contextConfig.withValue(
           SparkJobUtils.SPARK_PROXY_USER_PARAM,
           ConfigValueFactory.fromAnyRef("userName")))
-      expectMsgPF(10 seconds, "manager and result actors") {
-        case (manager: ActorRef, resultActor: ActorRef) =>
-          assert(manager.path.name.startsWith("userName" + SparkJobUtils.NameContextDelimiter))
-          assert(manager.path.name.endsWith("spark.jobserver.SleepJob"))
+      expectMsgPF(10.seconds, "manager and result actors") {
+        case (name: String, Some(manager: ActorRef), Some(resultActor: ActorRef)) =>
+          manager ! GetContextConfig
+          expectMsgPF(10.seconds, "context config") {
+            case config: ContextConfig =>
+              val cxtName = config.contextName
+              assert(cxtName.startsWith("userName" + SparkJobUtils.NameContextDelimiter))
+              assert(cxtName.endsWith("spark.jobserver.SleepJob"))
+          }
       }
     }
 
@@ -132,7 +141,7 @@ class LocalContextSupervisorSpec extends TestKit(LocalContextSupervisorSpec.syst
       expectMsg(ContextInitialized)
       supervisor ! GetContext("c1")
       expectMsgPF(5 seconds, "I can't find that context :'-(") {
-        case (contextActor: ActorRef, resultActor: ActorRef) =>
+        case (actorName: String, Some(contextActor: ActorRef), Some(resultActor: ActorRef)) =>
           contextActor ! GetContextConfig
           val cc = expectMsgClass(classOf[ContextConfig])
           cc.contextName shouldBe "c1"
@@ -171,7 +180,7 @@ class LocalContextSupervisorSpec extends TestKit(LocalContextSupervisorSpec.syst
       supervisor ! AddContext("c1", contextConfig)
       expectMsg(ContextInitialized)
       supervisor ! GetContext("c1")
-      val (jobManager: ActorRef, _) = expectMsgType[(_, _)]
+      val (actName: String, Some(jobManager: ActorRef), _) = expectMsgType[(_, _, _)]
 
       jobManager ! PoisonPill
       val msg = daoProbe.expectMsgType[CleanContextJobInfos]

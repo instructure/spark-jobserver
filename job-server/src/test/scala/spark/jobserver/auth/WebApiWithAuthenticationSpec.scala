@@ -92,7 +92,7 @@ class WebApiWithAuthenticationSpec extends FunSpec with Matchers with BeforeAndA
 
         BasicAuth(authenticator _, realm = "Shiro Private")
       }
-      
+
       override def initSecurityManager() {
         val ini = {
           val tmp = new Ini()
@@ -146,7 +146,7 @@ class WebApiWithAuthenticationSpec extends FunSpec with Matchers with BeforeAndA
           addedContexts.add(name)
           sender ! ContextSupervisor.ContextInitialized
         }
-      case ContextSupervisor.StopContext(name) =>
+      case ContextSupervisor.StopContext(name, _) =>
         addedContexts.remove(name)
         sender ! ContextSupervisor.ContextStopped
       case ContextSupervisor.AddContextsFromConfig =>
@@ -493,4 +493,3 @@ class WebApiWithAuthenticationSpec extends FunSpec with Matchers with BeforeAndA
     }
   }
 }
-
