@@ -2,10 +2,11 @@ package spark.jobserver
 
 import akka.testkit._
 import com.typesafe.config.ConfigFactory
-import spark.jobserver.CommonMessages.{JobErroredOut, JobResult}
+import spark.jobserver.CommonMessages.{JobErroredOut, JobFinished, JobStarted}
 import spark.jobserver.common.akka.AkkaTestUtils
 import spark.jobserver.context.JavaSparkContextFactory
-import spark.jobserver.io.JobDAOActor
+import spark.jobserver.io.JobDAOActor.{GetJobResult, JobResult}
+import spark.jobserver.io.{InMemoryBinaryObjectsDAO, InMemoryMetaDAO, JobDAOActor}
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration._
@@ -15,7 +16,7 @@ class JavaJobSpec extends JobSpecBase(JobManagerActorSpec.getNewSystem) {
   val JobResultCacheSize = Integer.valueOf(30)
   val NumCpuCores = Integer.valueOf(Runtime.getRuntime.availableProcessors())
   val MemoryPerNode = "512m"
-  val MaxJobsPerContext = Integer.valueOf(2)
+  private val MaxJobsPerContext = Integer.valueOf(2)
 
   lazy val config = {
     val ConfigMap = Map(
@@ -31,12 +32,14 @@ class JavaJobSpec extends JobSpecBase(JobManagerActorSpec.getNewSystem) {
       "context.name" -> "ctx",
       "is-adhoc" -> "false"
     )
-    ConfigFactory.parseMap(ConfigMap.asJava).withFallback(ConfigFactory.defaultOverrides())
+    ConfigFactory.parseMap(ConfigMap.asJava).withFallback(ConfigFactory.defaultOverrides()).
+      withFallback(ConfigFactory.parseString("cp = [\"demo\"]"))
   }
 
   before {
-    dao = new InMemoryDAO
-    daoActor = system.actorOf(JobDAOActor.props(dao))
+    inMemoryMetaDAO = new InMemoryMetaDAO
+    inMemoryBinDAO = new InMemoryBinaryObjectsDAO
+    daoActor = system.actorOf(JobDAOActor.props(inMemoryMetaDAO, inMemoryBinDAO, daoConfig))
     manager = system.actorOf(JobManagerActor.props(daoActor))
     supervisor = TestProbe().ref
   }
@@ -55,21 +58,29 @@ class JavaJobSpec extends JobSpecBase(JobManagerActorSpec.getNewSystem) {
 
   describe("Running Java Jobs") {
     it("Should run a java job") {
-      manager ! JobManagerActor.Initialize(config, None, emptyActor)
+      val testJar = uploadTestJar()
+
+      manager ! JobManagerActor.Initialize(config, emptyActor)
       expectMsgClass(initMsgWait, classOf[JobManagerActor.Initialized])
-      uploadTestJar()
-      manager ! JobManagerActor.StartJob("demo", javaJob, config, syncEvents ++ errorEvents)
+
+      manager ! JobManagerActor.StartJob(javaJob, List(testJar), config, allEvents)
       expectMsgPF(startJobWait, "No job ever returned :'(") {
-        case JobResult(_, result) => result should be("Hi!")
+        case JobStarted(jobId, _jobInfo) =>
+          expectMsgClass(classOf[JobFinished])
+          daoActor ! GetJobResult(jobId)
+          expectMsg(JobResult("Hi!"))
       }
     }
+
     it("Should fail running this java job"){
-      manager ! JobManagerActor.Initialize(config, None, emptyActor)
+      val testJar = uploadTestJar()
+
+      manager ! JobManagerActor.Initialize(config, emptyActor)
       expectMsgClass(initMsgWait, classOf[JobManagerActor.Initialized])
-      uploadTestJar()
-      manager ! JobManagerActor.StartJob("demo", failedJob, config, errorEvents)
+
+      manager ! JobManagerActor.StartJob(failedJob, List(testJar), config, errorEvents)
       expectMsgPF(6 seconds, "Gets correct exception"){
-        case JobErroredOut(_, _, ex) => ex.getMessage should equal("java.lang.RuntimeException: fail")
+        case JobErroredOut(_, _, ex) => ex.getMessage should equal("fail")
       }
     }
   }

@@ -15,6 +15,13 @@ class MyErrorJob extends SparkTestJob {
   }
 }
 
+/** @see [[scala.util.control.NonFatal]] */
+class MyFatalErrorJob extends SparkTestJob {
+  def runJob(sc: SparkContext, config: Config): Any = {
+    throw new OutOfMemoryError("this is a fatal error")
+  }
+}
+
 class ConfigCheckerJob extends SparkTestJob {
   import scala.collection.JavaConverters._
 
@@ -52,7 +59,7 @@ class AccessCacheJob extends SparkTestJob {
 class CacheRddByNameJob extends SparkTestJob with NamedRddSupport {
   def runJob(sc: SparkContext, config: Config): Any = {
     import scala.concurrent.duration._
-    implicit val timeout = 100 millis
+    implicit val timeout = 2000 millis
 
     val rdd = namedRdds.getOrElseCreate(getClass.getSimpleName, {
       // anonymous generator function
@@ -86,9 +93,10 @@ object SimpleObjectJob extends SparkTestJob {
 class jobJarDependenciesJob extends SparkTestJob {
   def runJob(sc: SparkContext, config: Config): Any = {
     val loadedClasses = Seq(
-      getClass.getClassLoader.loadClass("spark.jobserver.context.SQLContextFactory").getName(),
-      getClass.getClassLoader.loadClass("spark.jobserver.context.HiveContextFactory").getName(),
-      getClass.getClassLoader.loadClass("spark.jobserver.context.StreamingContextFactory").getName()
+      // EmptyClass is provided as a dependency in emptyJar
+      getClass.getClassLoader.loadClass("EmptyClass").getName,
+      getClass.getClassLoader.loadClass("EmptyClass").getName,
+      getClass.getClassLoader.loadClass("EmptyClass").getName
       )
     val input = sc.parallelize(loadedClasses)
     input.countByValue()

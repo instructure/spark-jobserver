@@ -1,27 +1,23 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [LocalClusterSupervisor (context-per-jvm=false)](#localclustersupervisor-context-per-jvmfalse)
+  - [Jar routes](#jar-routes)
+  - [Context routes](#context-routes)
+  - [Job routes](#job-routes)
+- [AkkaClusterSupervisor (context-per-jvm=true)](#akkaclustersupervisor-context-per-jvmtrue)
+  - [Context routes](#context-routes-1)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 (use http://websequencediagrams.com/ to visualize sequence diagrams)
 
-Jar routes
+LocalClusterSupervisor (context-per-jvm=false)
 ==========
-- get a list of mapping from appName to uploadTime for all the known job jars:
-
-        user->WebApi: GET /jars
-        WebApi->JarManager: ListJars
-        JarManager->WebApi: Map(appName -> uploadTime)
-        WebApi->user: 200 + JSON
-
-- upload a job jar file with an appName
-
-        user->WebApi: POST /jars/<appName> jarFile
-        WebApi->JarManager: StoreJar(appName, jarBytes)
-        opt if Jar validation fails
-          JarManager->WebApi: InvalidJar
-          WebApi->user: 400
-        end
-        JarManager->WebApi: JarStored
-        WebApi->user: 200
 
 Context routes
-==============
+----------
 - get a list of all known contextNames
 
         user->WebApi: GET /contexts
@@ -64,42 +60,37 @@ Context routes
 
 
 Job routes
-==========
+----------
 - get a list of JobInfo(jobId, contextName, JarInfo, classPath, startTime, Option(endTime), Option(Throwable)) of all known jobs
 
         user->WebApi: GET /jobs
-        WebApi->JobInfoActor: GetJobStatuses
-        note over JobInfoActor: JobDao.getJobInfos...
-        JobInfoActor->WebApi: Seq[JobInfo]
+        WebApi->JobDAOActor:GetJobInfos
+        note over JobDAOActor: JobDao.getJobInfos...
+        JobDAOActor->WebApi:JobInfos(Seq[JobInfo])
         WebApi->user: 200 + JSON
 
 - get job result with jobId
 
         user->WebApi: GET /jobs/<jobId>
-        WebApi->JobInfoActor: GetJobResult(jobId)
-        note over JobInfoActor: JobDao.getJobInfos.get(jobId)
+        WebApi->JobDAOActor:GetJobInfo(jobId)
+        note over JobDAOActor: JobDao.getJobInfos.get(jobId)
         opt if jobId not found:
-          JobInfoActor->WebApi: NoSuchJobId
+          JobDAOActor->WebApi:None
           WebApi->user: 404
         end
         opt if job is running or error out:
-          JobInfoActor->WebApi: JobInfo
-          WebApi->user: 200 + "RUNNING" | "ERROR"
+          JobDAOActor->WebApi:Some(jobInfo)
+          WebApi->user:200 + "RUNNING" | "ERROR | "KILLED"
         end
-        JobInfoActor->LocalContextSupervisor:GetContext(contextName)
-        opt if no such context:
-          LocalContextSupervisor->JobInfoActor: NoSuchContext
-          note over JobInfoActor: NOT HANDLED
-        end
-        LocalContextSupervisor->JobInfoActor: (JobManager, JobResultActor)
-        JobInfoActor->JobResultActor: GetJobResult(jobId)
+        WebApi -> LocalContextSupervisor:GetResultActor(contextName)
+        LocalContextSupervisor -> WebApi: (ActorRef)
+        WebApi -> JobResultActor: GetJobResult(jobId)
         opt if jobId not in cache:
-            JobResultActor->JobInfoActor: NoSuchJobId
-            JobInfoActor->WebApi: NoSuchJobId
-            WebApi->user: 404
+            JobResultActor->WebApi: NoSuchJobId
+            WebApi->user: 200, jobs json without result
         end
-        JobResultActor->JobInfoActor: JobResult(jobId, Any)
-        JobInfoActor->WebApi: JobResult(jobId, Any)
+
+        JobResultActor->WebApi: JobResult(jobId, Any)
         WebApi->user: 200 + resultToTable(result)
 
 - submit a job
@@ -114,7 +105,7 @@ Job routes
         WebApi->JobManager: StartJob(appName, clasPatch, userConfig, asyncEvents | syncEvents)
         note over JobManager: JobDao.getLastUploadTime(appName)
         opt if no such appName:
-          JobManager->WebApi: NoSuchApplication
+          JobManager->WebApi: NoSuchBinary
           WebApi->user: 404
         end
         note over JobManager: CREATE unique jobID
@@ -168,18 +159,209 @@ Job routes
 - kill a job with jobId
 
         user->WebApi: DELETE /jobs/<jobId>
-        WebApi->JobInfoActor: GetJobResult(jobId)
-        note over JobInfoActor: JobDao.getJobInfos.get(jobId)
+        WebApi->JobDAOActor: GetJobInfo(jobId)
+        note over JobDAOActor: JobDao.getJobInfos.get(jobId)
         opt if jobId not found:
-          JobInfoActor->WebApi: NoSuchJobId
+          JobDAOActor->WebApi: None
           WebApi->user: 404
         end
+
         opt if job is running:
+          note over WebApi: getJobManagerForContext(contextname, config, classpath)
           WebApi->JobManager: KillJob(jobId)
           JobManager->WebApi: future{}
           WebApi->user: 200 + "KILLED"
         end
         opt if job has error out:
-           JobInfoActor->WebApi: JobInfo
+           JobDAOActor->WebApi: JobInfo
            WebApi->user: 200 + "ERROR"
         end
+        opt if job has state finished or killed:
+           JobDAOActor->WebApi: JobInfo
+           WebApi->user: 404 + "No running job with id <jobId>"
+        end
+        opt if fetching resulted in unexpected exception:
+           WebApi->user: 500 + "Received an unexpected message"
+        end
+
+AkkaClusterSupervisor (context-per-jvm=true)
+==========
+
+Context routes
+----------
+
+- Context create route
+
+        title POST /contexts
+
+        user->WebApi: POST /contexts/<contextName>
+        WebApi->AkkaClusterSupervisorActor: AddContext(contextName, config)
+        AkkaClusterSupervisorActor->JobDAOActor: GetContextInfoByName
+        JobDAOActor->AkkaClusterSupervisorActor: ContextResponse
+        opt context already there
+        AkkaClusterSupervisorActor->WebApi: ContextAlreadyExists
+        WebApi->user: 400 "Context <contextName> exists"
+        end
+        AkkaClusterSupervisorActor->ManagerLauncher: launcher.start()
+        opt Exception
+        AkkaClusterSupervisorActor->JobDAOActor: SaveContextInfo(Error)
+        AkkaClusterSupervisorActor->WebApi: ContextInitError
+        WebApi->user:  500 "CONTEXT INIT ERROR"
+        end
+        ManagerLauncher->JobManagerActor:initialize
+        AkkaClusterSupervisorActor->JobDAOActor: SaveContextInfo(Started)
+        ClusterDaemon->AkkaClusterSupervisorActor: MemberUp
+        AkkaClusterSupervisorActor->JobManagerActor: Identify
+        JobManagerActor->AkkaClusterSupervisorActor: ActorIdentity
+        AkkaClusterSupervisorActor->JobDAOActor: GetContextInfo
+        JobDAOActor->AkkaClusterSupervisorActor: ContextResponse
+        note over AkkaClusterSupervisorActor: Restart logic is contained here
+        AkkaClusterSupervisorActor->JobManagerActor: Initialize
+        JobManagerActor->SparkBackend: makeContext
+        JobManagerActor->AkkaClusterSupervisorActor: Initialized
+        opt InitError or other possible failures
+        AkkaClusterSupervisorActor->JobManagerActor: PoisonPill
+        AkkaClusterSupervisorActor->JobDAOActor: SaveContextInfo(Error)
+        AkkaClusterSupervisorActor->WebApi: ContextInitError
+        WebApi->user:  500 "CONTEXT INIT ERROR"
+        end
+        AkkaClusterSupervisorActor->JobDAOActor: SaveContextInfo(Running)
+        AkkaClusterSupervisorActor->WebApi: ContextInitialized
+        WebApi->user: 200 "Context initialized"
+
+- Context delete route (Normal flow)
+
+        title DELETE /contexts (Normal flow)
+
+        user->WebApi: DELETE /contexts/<contextName>
+        WebApi->AkkaClusterSupervisorActor: StopContext(contextName)
+        note right of AkkaClusterSupervisorActor:set context state=STOPPING
+        AkkaClusterSupervisorActor->JobManagerActor: StopContextAndShutdown
+        JobManagerActor->JobManagerActor: ContextStopScheduledMsgTimeout
+        JobManagerActor->SparkContext: sc.stop()
+        SparkContext -> JobManagerActor: onApplicationEnd
+        JobManagerActor ->JobManagerActor: SparkContextStopped
+        JobManagerActor -> JobStatusActor: watch
+        JobManagerActor ->JobStatusActor: stop
+        JobStatusActor ->JobStatusActor: postStop
+        JobStatusActor -> JobDaoActor: SaveJobInfo
+        DeathWatch ->JobManagerActor: Terminated(statusActor)
+        JobManagerActor->JobManagerActor: ContextStopScheduledMsgTimeout.cancel()
+        JobManagerActor ->AkkaClusterSupervisorActor: SparkContextStopped
+        JobManagerActor ->JobManagerActor: PoisonPill
+        AkkaClusterSupervisorActor ->WebApi: ContextStopped
+        DeathWatch ->AkkaClusterSupervisorActor: Terminated
+        note right of AkkaClusterSupervisorActor:set context state=FINISHED
+        DeathWatch->ProductionReaper: Terminated
+        ProductionReaper->ActorSystem: shutdown
+        WebApi ->user: 200
+
+- Context delete route (time out flow)
+
+        title DELETE /contexts (stop context timed out)
+
+        user->WebApi: DELETE /contexts/<contextName>
+        WebApi->AkkaClusterSupervisorActor: StopContext(contextName)
+        note right of AkkaClusterSupervisorActor:set context state=STOPPING
+        AkkaClusterSupervisorActor->JobManagerActor: StopContextAndShutdown
+        JobManagerActor->Akka Scheduler: schedule(ContextStopScheduledMsgTimeout, timeout)
+        JobManagerActor->SparkContext: sc.stop()
+
+        space
+        space
+        space
+        Akka Scheduler ->JobManagerActor: ContextStopScheduledMsgTimeout
+        JobManagerActor ->AkkaClusterSupervisorActor: ContextStopInProgress
+        AkkaClusterSupervisorActor ->WebApi: ContextStopInProgress
+        WebApi ->user: 202 & Location Header
+
+        space
+        ==User request to url which is in location header to get the state of stop==
+
+        user->WebApi: GET /contexts/<contextName>
+        WebApi->AkkaClusterSupervisorActor: GetSparkContexData(contextName)
+        AkkaClusterSupervisorActor->JobManagerActor: GetContexData
+
+        opt if context is running:
+        JobManagerActor->SparkContext: applicationId/webUrl
+        SparkContext ->JobManagerActor:
+        JobManagerActor->AkkaClusterSupervisorActor: ContexData
+        AkkaClusterSupervisorActor->WebApi: SparkContexData(ctxInfo, appId, webUrl)
+        end
+
+        opt if context is not alive:
+        JobManagerActor->SparkContext: applicationId/webUrl
+        JobManagerActor->JobManagerActor: Exception
+        JobManagerActor->AkkaClusterSupervisorActor: SparkContextDead
+        AkkaClusterSupervisorActor->WebApi:SparkContexData(ctxInfo, None, None)
+        end
+
+        WebApi->user: 200 & json with current state
+
+        space
+
+        space
+        ==User can send more requests when context stop is in progress==
+        space
+
+        user->WebApi: DELETE /contexts/<contextName>
+        WebApi->AkkaClusterSupervisorActor: StopContext(contextName)
+        AkkaClusterSupervisorActor->JobManagerActor: StopContextAndShutdown
+        JobManagerActor ->AkkaClusterSupervisorActor: ContextStopInProgress
+        AkkaClusterSupervisorActor ->WebApi: ContextStopInProgress
+        WebApi ->user: 202 & Location Header
+
+        space
+        ==Finally when context will stop, the following flow will be followed==
+        space
+
+        SparkContext -> JobManagerActor: onApplicationEnd
+        JobManagerActor ->JobManagerActor: SparkContextStopped
+        JobManagerActor -> JobStatusActor: watch
+        JobManagerActor ->JobStatusActor: stop
+        JobStatusActor ->JobStatusActor: postStop
+        JobStatusActor -> JobDaoActor: SaveJobInfo
+        DeathWatch ->JobManagerActor: Terminated(statusActor)
+        JobManagerActor ->JobManagerActor: PoisonPill
+        DeathWatch ->AkkaClusterSupervisorActor: Terminated
+
+        note right of AkkaClusterSupervisorActor:set context state=FINISHED
+        DeathWatch->ProductionReaper: Terminated
+        ProductionReaper->ActorSystem: shutdown
+
+        space
+        ==Further requests will fail==
+        space
+
+        user->WebApi: GET /contexts/<contextName>
+        WebApi->AkkaClusterSupervisorActor: GetSparkContexData(contextName)
+        AkkaClusterSupervisorActor->WebApi: NoSuchContext
+        WebApi->user: 404
+
+
+- Adhoc Context Stop
+
+        title Adhoc contexts stop (Normal flow)
+
+        user->WebApi: POST /job/<params>
+        WebApi->AkkaClusterSupervisorActor: StartAdHocContext(classPath, contextConfig)
+        AkkaClusterSupervisorActor->WebApi: ActorRef
+        WebApi->JobManagerActor: StartJob(...)
+        space
+        note right of JobManagerActor:Normal flow of starting a job
+        space
+        space
+        note right of JobManagerActor:Job finished
+        JobManagerActor->JobStatusActor: JobFinished
+        JobStatusActor->WebApi: JobResult
+        WebApi->user: 200
+        JobManagerActor->JobManagerActor: StopContextAndShutdown
+        JobManagerActor->JobDAOActor: SaveContextInfo(..., STOPPING)
+        JobManagerActor->SparkContext: sc.stop()
+        SparkContext -> JobManagerActor: onApplicationEnd
+        JobManagerActor ->JobManagerActor: SparkContextStopped
+        JobManagerActor ->JobManagerActor: PoisonPill
+        DeathWatch ->AkkaClusterSupervisorActor: Terminated
+        note right of AkkaClusterSupervisorActor:set context state=FINISHED
+        DeathWatch->ProductionReaper: Terminated
+        ProductionReaper->ActorSystem: shutdown

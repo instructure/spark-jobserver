@@ -1,15 +1,15 @@
 package spark.jobserver.python
 
 import com.typesafe.config.Config
-import org.scalactic.{Good, Every, Or}
+import org.scalactic.{Every, Good, Or}
 import org.slf4j.LoggerFactory
-import py4j.GatewayServer
-import spark.jobserver.api.{SparkJobBase, ValidationProblem, JobEnvironment}
+import spark.jobserver.api.{JobEnvironment, SparkJobBase, ValidationProblem}
+import spark.jobserver.util.JobserverPy4jGateway
 
-import scala.sys.process.{ProcessLogger, Process}
+import scala.sys.process.{Process, ProcessLogger}
 import scala.util.{Failure, Success, Try}
 
-case class PythonJob[X <: PythonContextLike](eggPath: String,
+case class PythonJob[X <: PythonContextLike](packagePath: String,
                                              modulePath: String,
                                              py4JImports: Seq[String]) extends SparkJobBase {
   override type JobData = Config
@@ -51,20 +51,22 @@ case class PythonJob[X <: PythonContextLike](eggPath: String,
     * @return the job result
     */
   override def runJob(sc: X, runtime: JobEnvironment, data: Config): Any = {
-    logger.info(s"Running $modulePath from $eggPath")
+    logger.info(s"Running $modulePath from $packagePath")
     val ep = endpoint(sc, runtime.contextConfig, runtime.jobId, data)
-    val server = new GatewayServer(ep, 0)
     val pythonPathDelimiter : String = if (System.getProperty("os.name").indexOf("Win") >= 0) ";" else ":"
-    val pythonPath = (eggPath +: sc.pythonPath).mkString(pythonPathDelimiter)
+    val pythonPath = (packagePath +: sc.pythonPath).mkString(pythonPathDelimiter)
     logger.info(s"Using Python path of ${pythonPath}")
+
+    val jobserverPy4jGateway = new JobserverPy4jGateway()
+
     val subProcessOutcome = Try {
       //Server runs asynchronously on a dedicated thread. See Py4J source for more detail
-      server.start()
+      val gatewayPort = jobserverPy4jGateway.getGatewayPort(ep)
       val process =
-        Process(
-          Seq(sc.pythonExecutable, "-m", "sparkjobserver.subprocess", server.getListeningPort.toString),
+        Process(Seq(sc.pythonExecutable, "-m", "sparkjobserver.subprocess",
+            gatewayPort, jobserverPy4jGateway.getToken()),
           None,
-          "EGGPATH" -> eggPath,
+          "PACKAGEPATH" -> packagePath,
           "PYTHONPATH" -> pythonPath,
           "PYSPARK_PYTHON" -> sc.pythonExecutable)
       val err = new StringBuffer
@@ -87,7 +89,7 @@ case class PythonJob[X <: PythonContextLike](eggPath: String,
           throw new Exception(s"Python job failed with error code $errorCode and standard err [$err]")
       }
     }
-    server.shutdown()
+    jobserverPy4jGateway.stop()
     subProcessOutcome match {
       case Success(res) => res
       case Failure(ex) => throw ex

@@ -1,3 +1,14 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [spark-jobserver](#spark-jobserver)
+  - [特性](#%E7%89%B9%E6%80%A7)
+  - [版本信息](#%E7%89%88%E6%9C%AC%E4%BF%A1%E6%81%AF)
+  - [部署](#%E9%83%A8%E7%BD%B2)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 spark-jobserver
 ===
 
@@ -15,7 +26,7 @@ Spark-jobserver 提供了一个 RESTful 接口来提交和管理 spark 的 jobs�
 - 支持 Standalone Spark 和 Mesos、yarn
 - Job 和 jar 信息通过一个可插拔的 DAO 接口来持久化
 - 对RDD或DataFrame对象命名并缓存，通过该名称获取RDD或DataFrame。这样可以提高对象在作业间的共享和重用
-- 支持 Scala 2.10 版本和 2.11 版本
+- 支持 Scala 2.11 版本和 2.12 版本
 
 ## 版本信息
 

@@ -1,6 +1,7 @@
 package spark.jobserver.common.akka.web
 
-import spray.routing.HttpService
+import akka.http.scaladsl.server.Directives._
+import akka.http.scaladsl.server.Route
 import com.yammer.metrics.core._
 import com.yammer.metrics.Metrics
 
@@ -9,8 +10,8 @@ import com.yammer.metrics.Metrics
  * * /metricz - dumps out all application metrics
  * * /statusz - dumps out GIT status of the running code
  */
-trait CommonRoutes extends HttpService {
-  val commonRoutes = {
+trait CommonRoutes {
+  val commonRoutes: Route = {
     get {
       path("metricz") {
         // TODO: Support option to return only certain metrics classes, or turn off pretty printing
@@ -89,7 +90,8 @@ object MetricsSerializer {
       case h: Histogram => Map("type" -> "histogram") ++ histogramToMap(h)
       case t: Timer =>
         Map("type" -> "timer", "rate" -> meterToMap(t),
-            "duration" -> (histogramToMap(t) ++ Map("units" -> t.durationUnit.toString.toLowerCase)))
+            "duration" -> (histogramToMap(t) ++ Map("units" -> t.durationUnit.toString.toLowerCase)
+                                             ++ Map("mean" -> t.mean())))
 
     }
   }

@@ -3,11 +3,15 @@ package spark.jobserver.stress
 import akka.actor.{ActorSystem, Props}
 import akka.pattern.ask
 import akka.util.Timeout
-import com.typesafe.config.ConfigFactory
-import org.joda.time.DateTime
+import com.typesafe.config.{Config, ConfigFactory}
+
 import scala.concurrent.Await
 import spark.jobserver._
-import spark.jobserver.io.{BinaryType, JobFileDAO}
+import spark.jobserver.io.JobDAOActor.{GetLastBinaryInfo, JobResult, LastBinaryInfo, SaveBinary}
+import spark.jobserver.io.{BinaryInfo, BinaryType, InMemoryBinaryObjectsDAO, InMemoryMetaDAO, JobDAOActor}
+import spark.jobserver.util.JobserverTimeouts
+
+import java.time.ZonedDateTime
 
 /**
  * A stress test for launching many jobs within a job context
@@ -18,9 +22,7 @@ import spark.jobserver.io.{BinaryType, JobFileDAO}
  */
 object SingleContextJobStress extends App with TestJarFinder {
 
-  import CommonMessages.JobResult
   import JobManagerActor._
-  import scala.collection.JavaConverters._
   import scala.concurrent.duration._
   val jobDaoPrefix = "target/scala-" + version + "/jobserver/"
   val config = ConfigFactory.parseString("""
@@ -33,15 +35,20 @@ object SingleContextJobStress extends App with TestJarFinder {
   implicit val ec = system
   implicit val ShortTimeout = Timeout(3 seconds)
 
-  val jobDaoDir = jobDaoPrefix + DateTime.now.toString()
-  val jobDaoConfig = ConfigFactory.parseMap(Map("spark.jobserver.filedao.rootdir" -> jobDaoDir).asJava)
-  val dao = new JobFileDAO(jobDaoConfig)
+  val jobDaoDir = jobDaoPrefix + ZonedDateTime.now.toString()
+  lazy val daoConfig: Config = ConfigFactory.load("local.test.dao.conf")
+  val inMemoryMetaDAO = new InMemoryMetaDAO
+  val inMemoryBinDAO = new InMemoryBinaryObjectsDAO
+  val daoActor = system.actorOf(JobDAOActor.props(inMemoryMetaDAO, inMemoryBinDAO, daoConfig))
 
-  val jobManager = system.actorOf(Props(classOf[JobManagerActor], dao, "c1", "local[4]", config, false))
+  val jobManager = system.actorOf(Props(classOf[JobManagerActor], daoActor, "c1", "local[4]", config, false))
 
-  private def uploadJar(jarFilePath: String, appName: String) {
+  private def uploadJar(jarFilePath: String, appName: String): BinaryInfo = {
     val bytes = scala.io.Source.fromFile(jarFilePath, "ISO-8859-1").map(_.toByte).toArray
-    dao.saveBinary(appName, BinaryType.Jar, DateTime.now, bytes)
+    Await.result(daoActor ? SaveBinary(appName, BinaryType.Jar, ZonedDateTime.now, bytes),
+      JobserverTimeouts.DAO_DEFAULT_TIMEOUT)
+    Await.result(daoActor ? GetLastBinaryInfo(appName), JobserverTimeouts.DAO_DEFAULT_TIMEOUT).
+      asInstanceOf[LastBinaryInfo].lastBinaryInfo.get
   }
 
   private val demoJarPath = testJar.getAbsolutePath
@@ -52,16 +59,16 @@ object SingleContextJobStress extends App with TestJarFinder {
   val res1 = Await.result(jobManager ? Initialize, 3 seconds)
   assert(res1.getClass == classOf[Initialized])
 
-  uploadJar(demoJarPath, "demo1")
+  val testBinInfo = uploadJar(demoJarPath, "demo1")
 
   // Now keep running this darn test ....
   var numJobs = 0
   val startTime = System.currentTimeMillis()
 
   while (true) {
-    val f = jobManager ? StartJob("demo1", demoJarClass, emptyConfig, Set(classOf[JobResult]))
+    val f = jobManager ? StartJob(demoJarClass, Seq(testBinInfo), emptyConfig, Set(classOf[JobResult]))
     Await.result(f, 3 seconds) match {
-      case JobResult(info, Some(m)) =>
+      case JobResult(Some(m)) =>
         numJobs += 1
         if (numJobs % 100 == 0) {
           val elapsed = System.currentTimeMillis() - startTime

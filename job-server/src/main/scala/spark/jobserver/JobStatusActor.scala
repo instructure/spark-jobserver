@@ -4,13 +4,16 @@ import scala.collection.mutable
 import scala.util.Try
 import akka.actor.{ActorRef, Props}
 import com.yammer.metrics.core.Meter
-import org.joda.time.DateTime
 import spark.jobserver.JobManagerActor.JobKilledException
 import spark.jobserver.common.akka.InstrumentedActor
 import spark.jobserver.common.akka.metrics.YammerMetrics
-import spark.jobserver.io.{ErrorData, JobDAOActor, JobInfo}
+import spark.jobserver.io.{JobDAOActor, JobInfo, JobStatus}
+import spark.jobserver.util.ErrorData
+
+import java.time.ZonedDateTime
 
 object JobStatusActor {
+  val NAME = "status-actor"
   case class JobInit(jobInfo: JobInfo)
   case class GetRunningJobStatus()
 
@@ -37,17 +40,20 @@ class JobStatusActor(jobDao: ActorRef) extends InstrumentedActor with YammerMetr
   val metricStatusRates = mutable.HashMap.empty[String, Meter]
 
   override def postStop(): Unit = {
-    val stopTime = DateTime.now()
+    super.postStop()
+
+    val stopTime = ZonedDateTime.now()
     val stoppedInfos = infos.values.map { info =>
+      logger.info(s"Setting job state to ${JobStatus.Error} for ${info.jobId}")
       val errorData = ErrorData(s"Context (${info.contextName}) for this job was terminated", "", "")
-      info.copy(endTime = Some(stopTime), error = Some(errorData))
+      info.copy(endTime = Some(stopTime), error = Some(errorData), state = JobStatus.Error)
     }
     stoppedInfos.foreach({info => jobDao ! JobDAOActor.SaveJobInfo(info)})
   }
 
   override def wrappedReceive: Receive = {
     case GetRunningJobStatus =>
-      sender ! infos.values.toSeq.sortBy(_.startTime) // TODO(kelvinchu): Use toVector instead in Scala 2.10
+      sender ! infos.values.toVector.sortBy(_.startTime.toInstant)
 
     case Unsubscribe(jobId, receiver) =>
       subscribers.get(jobId) match {
@@ -78,31 +84,33 @@ class JobStatusActor(jobDao: ActorRef) extends InstrumentedActor with YammerMetr
     case msg: JobStarted =>
       processStatus(msg, "started") {
         case (info, msg: JobStarted) =>
-          info.copy(startTime = msg.jobInfo.startTime)
+          info.copy(state = JobStatus.Running, startTime = msg.jobInfo.startTime)
       }
 
     case msg: JobFinished =>
       processStatus(msg, "finished OK", remove = true) {
         case (info, msg: JobFinished) =>
-          info.copy(endTime = Some(msg.endTime))
+          info.copy(state = JobStatus.Finished, endTime = Some(msg.endTime))
       }
 
     case msg: JobValidationFailed =>
       processStatus(msg, "validation failed", remove = true) {
         case (info, msg: JobValidationFailed) =>
-          info.copy(endTime = Some(msg.endTime), error = Some(ErrorData(msg.err)))
+          info.copy(state = JobStatus.Error, endTime = Some(msg.endTime),
+              error = Some(ErrorData(msg.err)))
       }
 
     case msg: JobErroredOut =>
       processStatus(msg, "finished with an error", remove = true) {
         case (info, msg: JobErroredOut) =>
-          info.copy(endTime = Some(msg.endTime), error = Some(ErrorData(msg.err)))
+          info.copy(state = JobStatus.Error, endTime = Some(msg.endTime),
+              error = Some(ErrorData(msg.err)))
       }
 
     case msg: JobKilled =>
       processStatus(msg, "killed", remove = true) {
         case (info, msg: JobKilled) =>
-          info.copy(endTime = Some(msg.endTime),
+          info.copy(state = JobStatus.Killed, endTime = Some(msg.endTime),
             error = Some(ErrorData(JobKilledException(info.jobId))))
       }
   }

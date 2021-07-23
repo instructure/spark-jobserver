@@ -1,12 +1,29 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Python Support](#python-support)
+  - [Setting up Spark Job Server with Python support](#setting-up-spark-job-server-with-python-support)
+  - [Writing a Python job](#writing-a-python-job)
+    - [Return types](#return-types)
+    - [Packaging a job](#packaging-a-job)
+  - [Running a job](#running-a-job)
+  - [PythonSessionContext](#pythonsessioncontext)
+  - [CustomContexts](#customcontexts)
+  - [Python 2](#python-2) 
+  - [Troubleshooting](#troubleshooting)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Python Support
 
 Spark Job Server supports Python jobs through a Python specific context factory
-`spark.jobserver.python.PythonSparkContextFactory`. See the [Contexts](contexts.md) documentation
+`spark.jobserver.python.PythonSessionContextFactory`. See the [Contexts](contexts.md) documentation
 for information on contexts.
 
 ## Setting up Spark Job Server with Python support
 
-The `PythonSparkContextFactory` class is part of `job-server-extras`, therefore it is the assembly jar of that sub-module
+The `PythonSessionContextFactory` class is part of `job-server-extras`, therefore it is the assembly jar of that sub-module
 which should be used (this is the default for deployment anyway).
 
 The application config can be configured with paths to be added to the `PYTHONPATH` environment variable when the python
@@ -30,10 +47,10 @@ A basic config supporting Python might look like:
         python {
           paths = [
             ${SPARK_HOME}/python,
-            "/home/user/spark-jobserver/job-server-extras/job-server-python/target/python/spark_jobserver_python-0.8.0-py2.7.egg"
+            "/home/user/spark-jobserver/job-server-extras/job-server-python/target/python/spark_jobserver_python-0.10.1_SNAPSHOT-py3-none-any.whl"
           ]
 
-          # The default value in application.conf is "python"
+          # The default value in application.conf is "python3"
           executable = "python3"
         }
       }
@@ -106,7 +123,7 @@ class WordCountSparkJob(SparkJob):
             return build_problems(['config input.strings not found'])
 
     def run_job(self, context, runtime, data):
-        return context.parallelize(data).countByValue()
+        return context._sc.parallelize(data).countByValue()
 ```
 
 ### Return types
@@ -123,8 +140,8 @@ would be fine.
 
 ### Packaging a job
 
-In order to be able to push a job to the the job server, it must be packaged into a Python Egg file. Similar to a Jar,
-this is just a Zip file with a particular internal structure. Eggs can be built using the
+In order to be able to push a job to the job server, it must be packaged into a Python Egg or Wheel file. Similar to a
+Jar, both formats are just a Zip file with a particular internal structure. They can be built using the
 [setuptools](https://setuptools.readthedocs.io/en/latest/) library.
 
 In the most basic setup, a job ready for packaging would be structured as:
@@ -136,7 +153,7 @@ In the most basic setup, a job ready for packaging would be structured as:
 `setup.py` would contain something like:
 
 ```python
-    from setuptools import setup,
+    from setuptools import setup
 
     setup(
         name='my_job_package',
@@ -144,20 +161,30 @@ In the most basic setup, a job ready for packaging would be structured as:
     )
 ```
 
-Then, running `python setup.py bdist_egg` will create a file `dist/my_job_package-0.0.0-py2.7.egg`.
+Then, running `python3 setup.py bdist_wheel` will create a file similar to `dist/my_job_package-0.0.0-py3-none-any.whl`.
+
+## Uploading a Package
+
+Whereas Java and Scala jobs are packaged as Jar files, Python jobs need to be packaged as `Egg` or `Wheel` files. A set
+of example jobs can be build using the `job-server-python/` sbt task `job-server-python/buildPyExamples`. This builds an
+examples Egg and Wheel in `job-server-python/target/python` so we could push this to the server as a job binary:
+
+    curl --data-binary @dist/my_job_package-0.0.0-py3-none-any.whl \
+    -H 'Content-Type: application/python-wheel' localhost:8090/binaries/my_py_job
+
+The Spark Jobserver  uses the `Content-Type` header to distinguish between the different python package types:
+
+| Content-Type                 | Package Format                                              |
+|------------------------------|-------------------------------------------------------------|
+| `application/python-egg`     | [Egg](https://packaging.python.org/glossary/#term-Egg)      |
+| `application/python-wheel`   | [Wheel](https://packaging.python.org/glossary/#term-Wheel)  |
+| `application/python-archive` | Egg (deprecated, use `python-egg` instead)                  |
 
 ## Running a job
 
 If Spark Job Server is running with Python support, A Python context can be started with, for example:
 
-    curl -X POST "localhost:8090/contexts/py-context?context-factory=spark.jobserver.python.PythonSparkContextFactory"
-
-Whereas Java and Scala jobs are packaged as Jar files, Python jobs need to be packaged as `Egg` files. A set of example jobs
-can be build using the `job-server-python/` sbt task `job-server-python/buildPyExamples`. this builds an examples Egg
-in `job-server-python/target/python` so we could push this to the server as a job binary:
-
-    curl --data-binary @dist/my_job_package-0.0.0-py2.7.egg \
-    -H 'Content-Type: application/python-archive' localhost:8090/binaries/my_py_job
+    curl -X POST "localhost:8090/contexts/py-context?context-factory=spark.jobserver.python.PythonSessionContextFactory"
 
 Then, running a Python job is similar to running other job types:
 
@@ -166,12 +193,18 @@ Then, running a Python job is similar to running other job types:
 
     curl "localhost:8090/jobs/<job-id>"
 
-## SQLContext and HiveContext support
+Note: The SparkJobServer takes care of pushing the Egg/Wheel file you uploaded to Spark as part of the job submission, ensuring that all workers have access to the full contents of the archive.  
 
-Python support is also available for `SQLContext` and `HiveContext`. Simply launch a context using
-`spark.jobserver.python.PythonSQLContextFactory` or `spark.jobserver.python.PythonHiveContextFactory`. For example:
+## PythonSessionContext
 
-    curl -X POST "localhost:8090/contexts/pysql-context?context-factory=spark.jobserver.python.PythonSQLContextFactory"
+Python session context provides full access to Spark Session including access to the underlying Spark Context.  
+The previously available `SQLContext` and `HiveContext` Context Factory are no longer supported. 
+
+
+Simply launch a context using
+`spark.jobserver.python.PythonSessionContextFactory` For example:
+
+    curl -X POST "localhost:8090/contexts/pysql-context?context-factory=spark.jobserver.python.PythonSessionContextFactory"
 
 When implementing the Python job, you can simply assume that the `context` argument to `validate` and `run_job`
 is of the appropriate type. Due to dynamic typing in Python, this is not enforced in the method definitions. For example:
@@ -182,8 +215,6 @@ class SQLAverageJob(SparkJob):
     def validate(self, context, runtime, config):
         problems = []
         job_data = None
-        if not isinstance(context, SQLContext):
-            problems.append('Expected a SQL context')
         if config.get('input.data', None):
             job_data = config.get('input.data')
         else:
@@ -204,15 +235,15 @@ class SQLAverageJob(SparkJob):
 ```
 
 The above job implementation checks during the `validate` stage that the `context` object is of the correct type.
-Then in `run_job` dataframe operations are used, which exist on `SQLContext`.
+Then in `run_job` dataframe operations are used, which exist on `SessionContext`.
 
 This job is one of the examples so running the sbt task `job-server-python/buildPyExamples` and uploading the resulting
-Egg makes this job available:
+archive makes this job available:
 
-    curl --data-binary @job-server-python/target/python/sjs_python_examples-0.8.0-py2.7.egg \
-    -H 'Content-Type: application/python-archive' localhost:8090/binaries/example_jobs
+    curl --data-binary @job-server-python/target/python/sjs_python_examples-0.10.1_SNAPSHOT-py3-none-any.whl \
+    -H 'Content-Type: application/python-wheel' localhost:8090/binaries/example_jobs
 
-The input to the job can be provided as a conf file, e.g. with the contents:
+The input to the job can be provided as a conf file, in this example `sqlinput.conf`, with the contents:
 
     input.data = [
       ["bob", 20, 1200],
@@ -221,7 +252,7 @@ The input to the job can be provided as a conf file, e.g. with the contents:
       ["sue", 21, 1600]
     ]
 
-Then we can submit the `SQLContext` based job:
+Then we can submit the `SessionContext` based job:
 
     curl -d @sqlinput.conf \
     "localhost:8090/jobs?appName=example_jobs&classPath=example_jobs.sql_average.SQLAverageJob&context=pysql-context"
@@ -247,3 +278,19 @@ The Python support can support arbitrary context types as long as they are based
 contexts of your custom type, your Python jobs which use this context must implement an additional method,
 `build_context(self, gateway, jvmContext, sparkConf)`, which returns the Python equivalent of the JVM Context object.
 For a simple example, see `CustomContextJob` in the `job-server-python` sub-module.
+
+
+## Python 2
+By default, spark jobserver builds all python dependencies, namely `sparkjobserver` and `sjs_python_examples` for
+python 3. The packed binaries are also compatible with python 2. If you would like to, you can explicitly build all
+libraries for python 2 by setting the environment variable `PYTHON_EXECUTABLE` to a python 2 executable before packaging
+spark jobserver.
+
+
+## Troubleshooting
+
+### TypeError: an integer is required (got type bytes)
+
+Spark-2.4 does not support python >= 3.8 (see [here](https://github.com/apache/spark/pull/26194) for more information).
+If you encounter this issue, please verify that you provide a python executable < 3.8 in your
+[configuration file](../job-server/src/main/resources/application.conf#L210).

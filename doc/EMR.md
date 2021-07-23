@@ -1,3 +1,17 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Step by step instruction on how to run Spark Job Server on EMR 4.2.0 (Spark 1.6.0)](#step-by-step-instruction-on-how-to-run-spark-job-server-on-emr-420-spark-160)
+  - [Create EMR 4.2.0 cluster](#create-emr-420-cluster)
+  - [Configure master box](#configure-master-box)
+  - [Build spark-jobserver distribution](#build-spark-jobserver-distribution)
+  - [Deploy spark-jobserver](#deploy-spark-jobserver)
+  - [Test spark-jobserver](#test-spark-jobserver)
+  - [Troubleshooting](#troubleshooting)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 ## Step by step instruction on how to run Spark Job Server on EMR 4.2.0 (Spark 1.6.0)
 
 See also running in [cluster mode](cluster.md), running [YARN in client mode](yarn.md) and running on [Mesos](Mesos.md).
@@ -40,7 +54,7 @@ InstanceCount=10,BidPrice=2.99,Name=sparkSlave,InstanceGroupType=CORE,InstanceTy
 
 ### Build spark-jobserver distribution
 
-1. Install sbt 0.13.9 as described here http://www.scala-sbt.org/0.13/tutorial/Manual-Installation.html
+1. Install sbt as described here https://www.scala-sbt.org/download.html
 2. Install jdk 1.7.0 and git
  ```
  sudo yum install java-1.7.0-openjdk-devel git
@@ -73,6 +87,11 @@ InstanceCount=10,BidPrice=2.99,Name=sparkSlave,InstanceGroupType=CORE,InstanceTy
  HADOOP_CONF_DIR=/etc/hadoop/conf
  YARN_CONF_DIR=/etc/hadoop/conf
  SCALA_VERSION=2.10.5
+ MANAGER_JAR_FILE="$appdir/spark-job-server.jar"
+ MANAGER_CONF_FILE="$(basename $conffile)"
+ MANAGER_EXTRA_JAVA_OPTIONS=
+ MANAGER_EXTRA_SPARK_CONFS="spark.yarn.submit.waitAppCompletion=false|spark.files=$appdir/log4jcluster.properties,$conffile"
+ MANAGER_LOGGING_OPTS="-Dlog4j.configuration=log4j-cluster.properties"
  ```
 
 6. Create config/emr.conf
@@ -82,21 +101,16 @@ InstanceCount=10,BidPrice=2.99,Name=sparkSlave,InstanceGroupType=CORE,InstanceTy
    master = "yarn-client"
    jobserver {
      port = 8090
-     # Note: JobFileDAO is deprecated from v0.7.0 because of issues in
-     # production and will be removed in future, now defaults to H2 file.
      jobdao = spark.jobserver.io.JobSqlDAO
 
-     filedao {
-       rootdir = /mnt/tmp/spark-jobserver/filedao/data
-     }
      sqldao {
        # Slick database driver, full classpath
-       slick-driver = slick.driver.H2Driver
+       slick-driver = slick.jdbc.H2Profile
 
        # JDBC driver, full classpath
        jdbc-driver = org.h2.Driver
 
-       # Directory where default H2 driver stores its data. Only needed for H2.
+       # Directory where binaries are cached and default H2 driver stores its data
        rootdir = /tmp/spark-jobserver/sqldao/data
 
        # Full JDBC URL / init string, along with username and password.  Sorry, needs to match above.

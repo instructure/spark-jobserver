@@ -1,50 +1,53 @@
 package spark.jobserver
 
+import akka.actor.{Actor, ActorRef, Props}
+import akka.http.scaladsl.model.MediaTypes
+import akka.http.scaladsl.model.StatusCodes._
+import akka.http.scaladsl.model.headers.`Content-Type`
+import akka.http.scaladsl.server.Route
+import akka.http.scaladsl.server.Route.{seal => sealRoute}
+import akka.http.scaladsl.testkit.ScalatestRouteTest
+import akka.http.scaladsl.unmarshalling.Unmarshal
 import com.typesafe.config.ConfigFactory
-import spark.jobserver.io.BinaryType
-import spray.http.{MediaTypes, HttpHeaders, HttpHeader}
-import spray.http.StatusCodes._
-import spark.jobserver.io.JobStatus
+import spark.jobserver.CommonMessages.{JobErroredOut, JobFinished, JobStarted, Subscribe, Unsubscribe}
+import spark.jobserver.JobManagerActor.{JobLoadingError, StartJob}
+import spark.jobserver.io.JobDAOActor.{GetJobResult, JobResult}
+import spark.jobserver.io.{BinaryType, ContextStatus, JobInfo, JobStatus}
 import spark.jobserver.util.SparkJobUtils
+
+import scala.collection.JavaConverters._
+import scala.concurrent.duration._
+import scala.concurrent.Await
+
+import java.time.ZonedDateTime
 
 // Tests web response codes and formatting
 // Does NOT test underlying Supervisor / JarManager functionality
-// HttpService trait is needed for the sealRoute() which wraps exception handling
-class WebApiMainRoutesSpec extends WebApiSpec {
+class WebApiMainRoutesSpec extends WebApiSpec with ScalatestRouteTest {
   import spark.jobserver.common.akka.web.JsonUtils._
-  import spray.httpx.SprayJsonSupport._
   import spray.json.DefaultJsonProtocol._
+
+  var localDummyJobManager: ActorRef = _
+  var localApi: WebApi = _
+  var localRoutes: Route = _
+  val dummyLocalPort = 9998
+
+  def setupCustomWebAPI(localDummyJobManager: ActorRef): Unit = {
+    localApi = new WebApi(system, config, dummyLocalPort, dummyActor,
+      localDummyJobManager, localDummyJobManager, localDummyJobManager, null)
+    localRoutes = localApi.myRoutes
+  }
+
 
   val getJobStatusInfoMap = {
     Map(
       "jobId" -> "foo-1",
+      "contextId" -> "cid",
       "startTime" -> "2013-05-29T00:00:00.000Z",
       "classPath" -> "com.abc.meme",
       "context"  -> "context",
       "duration" -> "300.0 secs",
       StatusKey -> JobStatus.Finished)
-  }
-
-  describe("jars routes") {
-    it("should list all jars") {
-      Get("/jars") ~> sealRoute(routes) ~> check {
-        status should be (OK)
-        responseAs[Map[String, String]] should be (Map("demo1" -> "2013-05-29T00:00:00.000Z",
-                                                     "demo2" -> "2013-05-29T01:00:00.000Z"))
-      }
-    }
-
-    it("should respond with OK if jar uploaded successfully") {
-      Post("/jars/foobar", Array[Byte](0, 1, 2)) ~> sealRoute(routes) ~> check {
-        status should be (OK)
-      }
-    }
-
-    it("should respond with bad request if jar formatted incorrectly") {
-      Post("/jars/badjar", Array[Byte](0, 1, 2)) ~> sealRoute(routes) ~> check {
-        status should be (BadRequest)
-      }
-    }
   }
 
   describe("binaries routes") {
@@ -58,17 +61,37 @@ class WebApiMainRoutesSpec extends WebApiSpec {
       }
     }
 
-    it("should respond with OK if jar uploaded successfully") {
-      Post("/binaries/foobar", Array[Byte](0, 1, 2)).
-        withHeaders(BinaryType.Jar.contentType) ~> sealRoute(routes) ~> check {
+    it("should retrieve a specific binary") {
+      Get("/binaries/demo") ~> sealRoute(routes) ~> check {
         status should be (OK)
+        responseAs[Map[String, String]] should be(Map(
+          "app-name" -> "demo",
+          "binary-type" -> "Jar",
+          "upload-time" -> "2013-05-29T00:00:00.000Z"
+        ))
       }
     }
 
-    it("should respond with OK if egg uploaded successfully") {
+    it("should return with 404 if binary cannot be found") {
+      Get("/binaries/nonexisting") ~> sealRoute(routes) ~> check {
+        status should be (NotFound)
+        responseAs[Map[String, String]] should be(Map(
+            "status" -> "ERROR",
+            "result" -> "Can't find binary with name nonexisting"))
+      }
+    }
+
+    it("should respond with 201 if jar uploaded successfully") {
+      Post("/binaries/foobar", Array[Byte](0, 1, 2)).
+        withHeaders(BinaryType.Jar.contentType) ~> sealRoute(routes) ~> check {
+        status should be (Created)
+      }
+    }
+
+    it("should respond with 201 if egg uploaded successfully") {
       Post("/binaries/pyfoo", Array[Byte](0, 1, 2)).
         withHeaders(BinaryType.Egg.contentType) ~> sealRoute(routes) ~> check {
-        status should be (OK)
+        status should be (Created)
       }
     }
 
@@ -80,7 +103,7 @@ class WebApiMainRoutesSpec extends WebApiSpec {
 
     it("should respond with Unsupported Media Type if upload attempted with invalid content type header") {
       Post("/binaries/foobar", Array[Byte](0, 1, 2)).
-        withHeaders(HttpHeaders.`Content-Type`(MediaTypes.`application/json`)) ~> sealRoute(routes) ~> check {
+        withHeaders(`Content-Type`(MediaTypes.`application/json`)) ~> sealRoute(routes) ~> check {
         status should be (UnsupportedMediaType)
       }
     }
@@ -110,6 +133,26 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (NotFound)
       }
     }
+
+    it("should respond with 403 forbidden if user is deleting an active jar") {
+      Delete("/binaries/active") ~> sealRoute(routes) ~> check {
+        status should be (Forbidden)
+        responseAs[Map[String, String]] should be (
+          Map("status" -> "ERROR",
+            "result" -> "Binary is in use by job(s): job-active")
+        )
+      }
+    }
+
+    it("should handle failures of dao layer gracefully") {
+      Delete("/binaries/failure") ~> sealRoute(routes) ~> check {
+        status should be (InternalServerError)
+        responseAs[Map[String, String]] should be (
+          Map("status" -> "ERROR",
+            "result" -> "Failed to delete binary due to internal error. Check logs.")
+        )
+      }
+    }
   }
 
   describe("list jobs") {
@@ -118,12 +161,14 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (OK)
         responseAs[Seq[Map[String, String]]] should be (Seq(
           Map("jobId" -> "foo-1",
+              "contextId" -> "cid",
               "startTime" -> "2013-05-29T00:00:00.000Z",
               "classPath" -> "com.abc.meme",
               "context"  -> "context",
               "duration" -> "Job not done yet",
               StatusKey -> JobStatus.Running),
           Map("jobId" -> "foo-1",
+              "contextId" -> "cid",
               "startTime" -> "2013-05-29T00:00:00.000Z",
               "classPath" -> "com.abc.meme",
               "context"  -> "context",
@@ -137,6 +182,7 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (OK)
         responseAs[Seq[Map[String, String]]] should be (Seq(
           Map("jobId" -> "foo-1",
+            "contextId" -> "cid",
             "startTime" -> "2013-05-29T00:00:00.000Z",
             "classPath" -> "com.abc.meme",
             "context"  -> "context",
@@ -170,6 +216,7 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (OK)
         responseAs[Seq[Map[String, String]]] should be (Seq(
           Map("jobId" -> "foo-1",
+            "contextId" -> "cid",
             "startTime" -> "2013-05-29T00:00:00.000Z",
             "classPath" -> "com.abc.meme",
             "context"  -> "context",
@@ -193,34 +240,130 @@ class WebApiMainRoutesSpec extends WebApiSpec {
           sealRoute(routes) ~> check {
         status should be (BadRequest)
         val result = responseAs[Map[String, String]]
-        result(StatusKey) should equal(JobStatus.Error)
         result(ResultKey) should startWith ("Cannot parse")
       }
     }
 
+    it("should respond with bad request if no cp or appName given") {
+      Post("/jobs?classPath=com.abc.meme", "") ~>
+        sealRoute(routes) ~> check {
+        status should be (BadRequest)
+        val result = responseAs[Map[String, String]]
+        result.keys should equal (Set(StatusKey, ResultKey))
+        result(StatusKey) should equal(JobStatus.Error)
+        result(ResultKey) should startWith ("Cannot parse config: To start the job")
+      }
+    }
+
+    it("should respond with internal server error if failed to resolve cp path") {
+      Post("/jobs?cp=Failure&mainClass=com.abc.meme", "") ~>
+        sealRoute(routes) ~> check {
+        status should be (InternalServerError)
+        val result = responseAs[Map[String, Any]]
+        result.keys should equal (Set(StatusKey, ResultKey))
+        result(StatusKey) should equal(JobStatus.Error)
+      }
+    }
+
     it("should merge user passed jobConfig with default jobConfig") {
+      val expectedMergedConfig = Map(
+        masterConfKey->"overriden",
+        bindConfKey -> bindConfVal,
+        "foo.baz" -> "booboo",
+        "spark.jobserver.short-timeout" -> "3 s"
+      )
+
+      // Setup custom JobManager response, which can also check that config is merged
+      class JobManagerMockRequiredForTest extends DummyActor {
+        def testHandlers: Receive = {
+          case StartJob(_, _, config, _, _, _) =>
+            val map = config.entrySet().asScala.map {
+              entry => entry.getKey -> entry.getValue.unwrapped
+            }.toMap
+            try {
+              map should be(expectedMergedConfig)
+            } catch {
+              case _ => sender ! JobLoadingError(new Exception("Configuration is not the same!"))
+            }
+            sender ! JobFinished("foo", ZonedDateTime.now())
+        }
+        override def receive: Receive = testHandlers.orElse(super.customReceive)
+      }
+
+      setupCustomWebAPI(system.actorOf(Props(new JobManagerMockRequiredForTest)))
+
       val config2 = "foo.baz = booboo, spark.master=overriden"
       Post("/jobs?appName=foo&classPath=com.abc.meme&context=one&sync=true", config2) ~>
-          sealRoute(routes) ~> check {
+          sealRoute(localRoutes) ~> check {
         status should be (OK)
-        responseAs[Map[String, Any]] should be (Map(
-          JobId -> "foo",
-          ResultKey -> Map(
-            masterConfKey->"overriden",
-            bindConfKey -> bindConfVal,
-            "foo.baz" -> "booboo",
-            "shiro.authentication" -> "off",
-            "spark.jobserver.short-timeout" -> "3 s"
-          )
+      }
+    }
+
+    it("should merge appName and dependent-jar-uris for starting the job") {
+      class JobManagerMockRequiredForTest extends DummyActor {
+        def testHandlers: Receive = {
+          case StartJob(_, _, config, _, _, _) =>
+            try {
+              val dependentJars = config.getList("dependent-jar-uris").unwrapped().asScala.toList
+              dependentJars should be(List("foo"))
+            } catch {
+              case _: Exception =>
+                sender ! JobLoadingError(new Exception("Configuration is not the same!"))
+            }
+            sender ! JobFinished("foo", ZonedDateTime.now()) // because sync=true
+        }
+        override def receive: Receive = testHandlers.orElse(super.customReceive)
+      }
+
+      setupCustomWebAPI(system.actorOf(Props(new JobManagerMockRequiredForTest)))
+
+      Post(
+        "/jobs?appName=demo&classPath=com.abc.meme&context=one&sync=true", "dependent-jar-uris=[\"foo\"]"
+      ) ~>
+        sealRoute(localRoutes) ~> check {
+        status should be (OK)
+      }
+    }
+
+    it("should accept several binary names for cp parameter") {
+      class JobManagerMockRequiredForTest extends DummyActor {
+        def testHandlers: Receive = {
+          case StartJob(_, cp, config, events, _, _) =>
+            assert(Seq("multi", "some", "bin") == cp.map(_.appName), "cp path should include all binaries")
+            sender ! JobFinished("someJobID", dt) // because sync=true
+        }
+        override def receive: Receive = testHandlers.orElse(super.customReceive)
+      }
+
+      setupCustomWebAPI(system.actorOf(Props(new JobManagerMockRequiredForTest)))
+
+      Post(
+        "/jobs?cp=multi,some,bin&mainClass=com.abc.meme&context=one&sync=true", ""
+      ) ~>
+        sealRoute(localRoutes) ~> check {
+        status should be (OK)
+      }
+    }
+
+    it("should return not found if one of the binaries in given cp list is not found") {
+      Post(
+        "/jobs?cp=multi,some,BinaryNotFound&mainClass=com.abc.meme&context=one&sync=true", ""
+      ) ~>
+        sealRoute(routes) ~> check {
+        status should be (NotFound)
+        responseAs[Map[String, String]] should be (Map(
+          StatusKey -> "ERROR",
+          ResultKey -> "appName BinaryNotFound not found"
         ))
       }
     }
 
-    it("async route should return 202 if job starts successfully") {
-      Post("/jobs?appName=foo&classPath=com.abc.meme&context=one", "") ~> sealRoute(routes) ~> check {
+    it("async route should return 202 if job starts successfully (from cp value in job config)") {
+      Post("/jobs?mainClass=com.abc.meme&context=one", "cp=[\"foo\"]") ~> sealRoute(routes) ~> check {
         status should be (Accepted)
         responseAs[Map[String, String]] should be (Map(
           "jobId" -> "foo",
+          "contextId" -> "cid",
           "startTime" -> "2013-05-29T00:00:00.000Z",
           "classPath" -> "com.abc.meme",
           "context"  -> "context",
@@ -230,28 +373,84 @@ class WebApiMainRoutesSpec extends WebApiSpec {
       }
     }
 
-    it("adhoc job of sync route should return 200 and result") {
+    it("async route should return 202 if job starts successfully (from cp and mainClass values in URI)") {
+      Post("/jobs?mainClass=com.abc.meme&context=one&cp=foo", "") ~> sealRoute(routes) ~> check {
+        status should be (Accepted)
+        responseAs[Map[String, String]] should be (Map(
+          "jobId" -> "foo",
+          "contextId" -> "cid",
+          "startTime" -> "2013-05-29T00:00:00.000Z",
+          "classPath" -> "com.abc.meme",
+          "context"  -> "context",
+          "duration" -> "Job not done yet",
+          StatusKey -> JobStatus.Started)
+        )
+      }
+    }
+    it("async route should return 202 if job starts successfully") {
+      Post("/jobs?appName=foo&classPath=com.abc.meme&context=one", "") ~> sealRoute(routes) ~> check {
+        status should be (Accepted)
+        responseAs[Map[String, String]] should be (Map(
+          "jobId" -> "foo",
+          "contextId" -> "cid",
+          "startTime" -> "2013-05-29T00:00:00.000Z",
+          "classPath" -> "com.abc.meme",
+          "context"  -> "context",
+          "duration" -> "Job not done yet",
+          StatusKey -> JobStatus.Started)
+        )
+      }
+    }
+
+    it("async route should return 409 if job starts was triggered while the context was in stopping state") {
+      Post("/jobs?appName=context-already-stopped&classPath=com.abc.meme&context=one",
+          "") ~> sealRoute(routes) ~> check {
+        status should be (Conflict)
+        val result = responseAs[Map[String, String]]
+        result(StatusKey) should equal(JobStatus.Error)
+        result(ResultKey) should be("Context stop in progress")
+      }
+    }
+
+    it("adhoc job of sync route should return 200 and merge configurations") {
+      // Setup custom JobManager response, which can also check that config is merged
+      class JobManagerMockRequiredForTest extends DummyActor {
+        def testHandlers: Receive = {
+          case StartJob(_, _, config, _, _, _) =>
+            assert(config.getConfig("foo").getValue("baz").unwrapped() == "booboo",
+              "should include configuration")
+            sender ! JobFinished("someJobID", dt) // because sync=true
+        }
+        override def receive: Receive = testHandlers.orElse(super.customReceive)
+      }
+
+      setupCustomWebAPI(system.actorOf(Props(new JobManagerMockRequiredForTest)))
+
       val config2 = "foo.baz = booboo"
       Post("/jobs?appName=foo&classPath=com.abc.meme&sync=true", config2) ~>
-        sealRoute(routes) ~> check {
+        sealRoute(localRoutes) ~> check {
         status should be (OK)
-        responseAs[Map[String, Any]] should be (Map(
-          JobId -> "foo",
-          ResultKey -> Map(
-            masterConfKey -> masterConfVal,
-            bindConfKey -> bindConfVal,
-            "foo.baz" -> "booboo",
-            "shiro.authentication" -> "off",
-            "spark.jobserver.short-timeout" -> "3 s"
-          )
-        ))
       }
     }
 
     it("adhoc job with Stream result of sync route should return 200 and chunked result") {
+      // Setup custom JobManager response, which can also check that config is merged
+      val jobId = "someJobId"
+      class JobManagerMockRequiredForTest extends DummyActor {
+        def testHandlers: Receive = {
+          case StartJob(_, _, _, _, _, _) =>
+            sender ! JobFinished(jobId, ZonedDateTime.now())
+          case GetJobResult(_) =>
+            sender ! JobResult("\"1, 2, 3, 4, 5, 6\"".getBytes().toStream)
+        }
+        override def receive: Receive = testHandlers.orElse(super.customReceive)
+      }
+
+      setupCustomWebAPI(system.actorOf(Props(new JobManagerMockRequiredForTest)))
+
       val config2 = "foo.baz = booboo"
       Post("/jobs?appName=foo.stream&classPath=com.abc.meme&sync=true", config2) ~>
-        sealRoute(routes) ~> check {
+        sealRoute(localRoutes) ~> check {
         status should be (OK)
         responseAs[Map[String, Any]] should be (Map(
           ResultKey -> "1, 2, 3, 4, 5, 6"
@@ -260,20 +459,29 @@ class WebApiMainRoutesSpec extends WebApiSpec {
     }
 
     it("should be able to take a timeout param") {
+      class JobManagerMockRequiredForTest extends DummyActor {
+        def testHandlers: Receive = {
+          case StartJob(_, _, config, _, _, _) =>
+            try {
+              assert(config.getConfig("foo").getValue("baz").unwrapped() == "booboo",
+                "should include configuration")
+              assert(config.getConfig("spark").getConfig("jobserver").
+                getValue("short-timeout").unwrapped() == "3 s", "should include timeout")
+            } catch {
+              case _: Exception =>
+                sender ! JobLoadingError(new Exception("Configuration is not the same!"))
+            }
+            sender ! JobFinished("foo", ZonedDateTime.now()) // because sync=true
+        }
+        override def receive: Receive = testHandlers.orElse(super.customReceive)
+      }
+
+      setupCustomWebAPI(system.actorOf(Props(new JobManagerMockRequiredForTest)))
+
       val config2 = "foo.baz = booboo"
       Post("/jobs?appName=foo&classPath=com.abc.meme&sync=true&timeout=5", config2) ~>
-        sealRoute(routes) ~> check {
-        status should be (OK)
-        responseAs[Map[String, Any]] should be (Map(
-          JobId -> "foo",
-          ResultKey -> Map(
-            masterConfKey -> masterConfVal,
-            bindConfKey -> bindConfVal,
-            "foo.baz" -> "booboo",
-            "shiro.authentication" -> "off",
-            "spark.jobserver.short-timeout" -> "3 s"
-          )
-        ))
+        sealRoute(localRoutes) ~> check {
+          status should be (OK)
       }
     }
 
@@ -282,6 +490,7 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (Accepted)
         responseAs[Map[String, String]] should be (Map(
           "jobId" -> "foo",
+          "contextId" -> "cid",
           "startTime" -> "2013-05-29T00:00:00.000Z",
           "classPath" -> "com.abc.meme",
           "context"  -> "context",
@@ -296,6 +505,7 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (OK)
         responseAs[Map[String, String]] should be (Map(
           "jobId" -> "foo-1",
+          "contextId" -> "cid",
           "startTime" -> "2013-05-29T00:00:00.000Z",
           "classPath" -> "com.abc.meme",
           "context"  -> "context",
@@ -310,6 +520,7 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (OK)
         responseAs[Map[String, String]] should be (Map(
           "jobId" -> "foo-1",
+          "contextId" -> "cid",
           "startTime" -> "2013-05-29T00:00:00.000Z",
           "classPath" -> "com.abc.meme",
           "context"  -> "context",
@@ -320,9 +531,26 @@ class WebApiMainRoutesSpec extends WebApiSpec {
       }
     }
 
-    it("should respond with 404 Not Found from /jobs/<id> route if status of jobId does not exist") {
+    it("should return json without result if no job result was returned") {
+      Get("/jobs/fail_to_fetch_result") ~> sealRoute(routes) ~> check {
+        status should be (OK)
+        responseAs[Map[String, String]] should be (Map(
+          "jobId" -> "foo-1",
+          "contextId" -> "cid",
+          "startTime" -> "2013-05-29T00:00:00.000Z",
+          "classPath" -> "com.abc.meme",
+          "context"  -> "context",
+          "duration" -> "300.0 secs",
+          StatusKey -> JobStatus.Finished
+        ))
+      }
+    }
+
+    it("should respond with 404 Not Found and meaningful message if status of jobId does not exist") {
       Get("/jobs/_no_status") ~> sealRoute(routes) ~> check {
         status should be (NotFound)
+        val result = responseAs[Map[String, String]]
+        result(ResultKey) should startWith ("No such job ID ")
       }
     }
 
@@ -332,6 +560,36 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         responseAs[Map[String, String]] should be (Map(
           StatusKey -> JobStatus.Killed
         ))
+      }
+    }
+
+    it("should be able to kill job from /jobs/<id> route and return error if occurred") {
+      Delete("/jobs/job_kill_with_error") ~> sealRoute(routes) ~> check {
+        status should be (OK)
+        val result = responseAs[Map[String, Any]]
+        result(StatusKey).toString should be (JobStatus.Error)
+        val errorMap = result("ERROR").asInstanceOf[Map[String, String]]
+        errorMap("message") should be ("test-error")
+        errorMap("errorClass") should be ("java.lang.Throwable")
+        errorMap("stack") should startWith ("java.lang.Throwable: test-error")
+      }
+    }
+
+    it("should respond with 404 and meaningful message if jobId does not exist") {
+      val wrongJobId = "wrong_job_id"
+      Delete(s"/jobs/$wrongJobId") ~> sealRoute(routes) ~> check {
+        status should be (NotFound)
+        val result = responseAs[Map[String, String]]
+        result(ResultKey) should startWith (s"No such job ID $wrongJobId")
+      }
+    }
+
+    it("should respond with 404 and meaningful message if jobId was already killed") {
+      val alreadyKilledJobId = "already_killed"
+      Delete(s"/jobs/$alreadyKilledJobId") ~> sealRoute(routes) ~> check {
+        status should be (NotFound)
+        val result = responseAs[Map[String, String]]
+        result(ResultKey) should startWith (s"No running job with ID $alreadyKilledJobId")
       }
     }
 
@@ -373,6 +631,14 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (BadRequest)
         val resultMap = responseAs[Map[String, String]]
         resultMap(StatusKey) should be (JobStatus.Error)
+      }
+    }
+
+    it("should respond with 400 if job was not able to load due to malformed URI") {
+      Post("/jobs?appName=loadErr&classPath=com.abc.meme", " ") ~> sealRoute(routes) ~> check {
+        status should be (BadRequest)
+        val resultMap = responseAs[Map[String, Any]]
+        resultMap(StatusKey) should equal("JOB LOADING FAILED: Malformed URL")
       }
     }
 
@@ -439,7 +705,7 @@ class WebApiMainRoutesSpec extends WebApiSpec {
       Get("/jobs/_unk") ~> sealRoute(routes) ~> check {
         status should be (OK)
         responseAs[Map[String, Any]] should be (
-          getJobStatusInfoMap ++ Map(ResultKey -> Seq(1,  "101"))
+          getJobStatusInfoMap ++ Map(ResultKey -> Seq(1, "101"))
         )
       }
     }
@@ -454,9 +720,54 @@ class WebApiMainRoutesSpec extends WebApiSpec {
       }
     }
 
-    it("should respond with 404 Not Found if stopping unknown context") {
-      Delete("/contexts/none", "") ~> sealRoute(routes) ~> check {
-        status should be (NotFound)
+    it("should return context information with context UI url (local mode)") {
+      Get("/contexts/context1") ~> sealRoute(routes) ~> check {
+        status should be (OK)
+        responseAs[Map[String, String]] should be (Map(
+            "name" -> "context1",
+            "applicationId" -> "local-1337",
+            "url" -> "http://spark:4040"))
+      }
+    }
+
+    it("should return context information without context UI url (local mode)") {
+      Get("/contexts/context2") ~> sealRoute(routes) ~> check {
+        status should be (OK)
+        responseAs[Map[String, String]] should be (Map(
+            "name" -> "context2",
+            "applicationId" -> "local-1337"))
+      }
+    }
+
+    it("should return valid contextInfo for running context (cluster/client mode)") {
+      Get("/contexts/contextWithInfo") ~> sealRoute(routes) ~> check {
+        status should be (OK)
+        responseAs[Map[String, String]] should be (Map("name" -> "contextWithInfo",
+                                                       "applicationId" -> "local-1337",
+                                                       "url" -> "http://spark:4040",
+                                                       "state" -> ContextStatus.Running,
+                                                       "id" -> "contextId",
+                                                       "endTime" -> "Empty",
+                                                       "startTime" -> "2013-05-29T00:00:00.000Z"))
+      }
+    }
+
+    it("should return valid contextInfo for finished context (cluster/client mode)") {
+      Get("/contexts/finishedContextWithInfo") ~> sealRoute(routes) ~> check {
+        status should be (OK)
+        responseAs[Map[String, String]] should be (Map("name" -> "finishedContextWithInfo",
+                                                       "state" -> ContextStatus.Finished,
+                                                       "id" -> "contextId",
+                                                       "endTime" -> "2013-05-29T00:05:00.000Z",
+                                                       "startTime" -> "2013-05-29T00:00:00.000Z"))
+      }
+    }
+
+    it("should respond with InternalServerError if unexpected error occurs at getting context") {
+      Get("/contexts/unexp-err", "") ~> sealRoute(routes) ~> check {
+        status should be (InternalServerError)
+        val result = responseAs[Map[String, Any]]
+        result(ResultKey) should equal("UNEXPECTED ERROR OCCURRED")
       }
     }
 
@@ -466,10 +777,44 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be(OK)
       }
     }
-    
+
     it("should return OK if stopping known context") {
       Delete("/contexts/one", "") ~> sealRoute(routes) ~> check {
         status should be (OK)
+        val result = responseAs[Map[String, String]]
+        result(ResultKey) should equal("Context stopped")
+      }
+    }
+
+    it("should respond with InternalServerError if timeout occurs on a delete request") {
+      Delete("/contexts/timeout-ctx", "") ~> sealRoute(routes) ~> check {
+        status should be (InternalServerError)
+        val result = responseAs[Map[String, Any]]
+        result(StatusKey) should equal("CONTEXT DELETE ERROR")
+      }
+    }
+
+    it("should respond with 404 Not Found if stopping unknown context") {
+      Delete("/contexts/none", "") ~> sealRoute(routes) ~> check {
+        status should be (NotFound)
+        val result = responseAs[Map[String, String]]
+        result(ResultKey) should equal("context none not found")
+      }
+    }
+
+    it("should respond with InternalServerError if unexpected error occurs at deleting context") {
+      Delete("/contexts/unexp-err", "") ~> sealRoute(routes) ~> check {
+        status should be (InternalServerError)
+        val result = responseAs[Map[String, Any]]
+        result(ResultKey) should equal("UNEXPECTED ERROR OCCURRED")
+      }
+    }
+
+    it("should respond with 202 and location header if failed to stop context in time") {
+      Delete("/contexts/ctx-stop-in-progress", "") ~> sealRoute(routes) ~> check {
+        status should be (Accepted)
+        header("Location").get.value should be("http://example.com/contexts/ctx-stop-in-progress")
+        Await.result(Unmarshal(response.entity).to[String], 60 seconds) should be("")
       }
     }
 
@@ -478,15 +823,20 @@ class WebApiMainRoutesSpec extends WebApiSpec {
         status should be (BadRequest)
         val result = responseAs[Map[String, String]]
         result(StatusKey) should equal(JobStatus.Error)
+        result(ResultKey) should equal("context one exists")
       }
     }
 
     it("should return OK if starting a new context") {
       Post("/contexts/meme?num-cpu-cores=3") ~> sealRoute(routes) ~> check {
         status should be (OK)
+        val result = responseAs[Map[String, String]]
+        result(ResultKey) should equal("Context initialized")
       }
       Post("/contexts/meme?num-cpu-cores=3&coarse-mesos-mode=true") ~> sealRoute(routes) ~> check {
         status should be (OK)
+        val result = responseAs[Map[String, String]]
+        result(ResultKey) should equal("Context initialized")
       }
     }
 
@@ -502,18 +852,45 @@ class WebApiMainRoutesSpec extends WebApiSpec {
       }
     }
 
-    it("should return the sparkWebUi url if we get a context/id") {
-      Get("/contexts/context1") ~> sealRoute(routes) ~> check {
-        status should be (OK)
-        responseAs[Map[String, String]] should be (Map("context" -> "context1", "url" -> "http://spark:4040"))
+    it("should respond with InternalServerError if initialization error occurs") {
+      Post("/contexts/initError-ctx", "") ~> sealRoute(routes) ~> check {
+        status should be (InternalServerError)
+        val result = responseAs[Map[String, Any]]
+        result(StatusKey) should equal("CONTEXT INIT ERROR")
       }
     }
-    it("should return the context name if even no URL can be found") {
-      Get("/contexts/context2") ~> sealRoute(routes) ~> check {
-        status should be (OK)
-        responseAs[Map[String, String]] should be (Map("context" -> "context2"))
+
+    it("should respond with BadRequest if malformed URI error during initialization occurs") {
+      Post("/contexts/initError-URI-ctx", "") ~> sealRoute(routes) ~> check {
+        status should be (BadRequest)
+        val result = responseAs[Map[String, Any]]
+        result(StatusKey) should equal("CONTEXT INIT ERROR: Malformed URL")
+      }
+    }
+
+    it("should respond with InternalServerError if unexpected error occurs at adding context") {
+      Post("/contexts/unexp-err", "") ~> sealRoute(routes) ~> check {
+        status should be (InternalServerError)
+        val result = responseAs[Map[String, Any]]
+        result(ResultKey) should equal("UNEXPECTED ERROR OCCURRED")
+      }
+    }
+  }
+
+  describe("context reset route") {
+    import scala.concurrent.duration._
+    import akka.http.scaladsl.testkit.RouteTestTimeout
+    import akka.testkit.TestDuration
+
+    implicit val timeout = RouteTestTimeout(2.seconds.dilated)
+
+
+    it("should return valid JSON when resetting a context") {
+      Put("/contexts?reset=reboot", "") ~> sealRoute(routes) ~> check {
+        status shouldBe OK
+        val result = responseAs[Map[String, Any]]
+        result(ResultKey) should equal("Context reset")
       }
     }
   }
 }
-

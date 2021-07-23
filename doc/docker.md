@@ -1,3 +1,19 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Docker](#docker)
+  - [Configuration](#configuration)
+  - [Jars / Passing Arguments to the Start Script](#jars--passing-arguments-to-the-start-script)
+  - [Database, Persistence, Logs](#database-persistence-logs)
+  - [Marathon](#marathon)
+  - [Building docker image from the master branch](#building-docker-image-from-the-master-branch)
+  - [Issues](#issues)
+    - [I can't access a textfile](#i-cant-access-a-textfile)
+    - [Timeouts](#timeouts)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Docker
 
 Spark-jobserver is available as a Docker container!  This might be the easiest way to get started and deploy.
@@ -81,6 +97,14 @@ Example Marathon config, thanks to @peterklipfel:
   "mem": 100,
   "instances": 1
 }
+```
+
+## Building docker image from the master branch
+
+If you want to build your docker version based on current master branch:
+
+```
+sbt docker
 ```
 
 ## Issues

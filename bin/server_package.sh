@@ -1,5 +1,7 @@
-#!/bin/bash -ue
+#!/usr/bin/env bash
 # Script for packaging all the job server files to .tar.gz for Mesos or other single-image deploys
+set -u
+set -e
 WORK_DIR=/tmp/job-server
 
 if [ "$#" -ne 1 ]; then
@@ -47,7 +49,6 @@ pushd "${bin}/.." > /dev/null
          bin/server_start.sh
          bin/server_stop.sh
          bin/kill-process-tree.sh
-         bin/manager_start.sh
          bin/setenv.sh
          ${CONFIG_DIR}/${ENV}.conf
          config/shiro.ini

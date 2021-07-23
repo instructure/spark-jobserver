@@ -1,0 +1,170 @@
+package spark.jobserver.io
+
+import akka.http.scaladsl.model.MediaType.NotCompressible
+import akka.http.scaladsl.model.headers._
+import akka.http.scaladsl.model.{MediaType, MediaTypes, Uri}
+import spark.jobserver.util.ErrorData
+
+import java.time.ZonedDateTime
+import java.time.temporal.ChronoUnit
+
+trait BinaryType {
+  def extension: String
+  def name: String
+  def mediaType: String
+}
+
+object BinaryType {
+  case object Jar extends BinaryType {
+    val extension = "jar"
+    val name = "Jar"
+    val mediaType: String = MediaTypes.`application/java-archive`.value
+    @transient val contentType: `Content-Type` = `Content-Type`(MediaTypes
+      .`application/java-archive`.toContentType)
+  }
+
+  case object Egg extends BinaryType {
+    val extension = "egg"
+    val name = "Egg"
+    val mediaType: String = MediaType.applicationBinary("python-egg",
+      NotCompressible, "egg").value
+    @transient val contentType: `Content-Type` = `Content-Type`(MediaType.applicationBinary("python-egg",
+      NotCompressible, "egg").toContentType)
+  }
+
+  case object Wheel extends BinaryType {
+    val extension = "whl"
+    val name = "Wheel"
+    val mediaType: String = MediaType.applicationBinary("python-wheel",
+      NotCompressible, "whl").value
+    @transient val contentType: `Content-Type` = `Content-Type`(MediaType.applicationBinary("python-wheel",
+      NotCompressible, "whl").toContentType)
+  }
+
+  case object URI extends BinaryType {
+    // WARNING: only for internal use (not accepted for upload from user)
+    val extension = "uri"
+    val name = "Uri"
+    val mediaType: String = MediaTypes.`text/uri-list`.value
+    @transient val contentType: `Content-Type` = `Content-Type`(MediaTypes
+      .`text/uri-list`.toContentTypeWithMissingCharset)
+  }
+
+  def fromString(typeString: String): BinaryType = typeString match {
+    case Jar.name => Jar
+    case Egg.name => Egg
+    case Wheel.name => Wheel
+    case URI.name => URI
+  }
+
+  def fromMediaType(mediaType: MediaType): Option[BinaryType] = mediaType match {
+    case m if m.value == Jar.mediaType => Some(Jar)
+    case m if m.value == Wheel.mediaType => Some(Wheel)
+    case m if m.value == Egg.mediaType => Some(Egg)
+    case m if m.value == "application/python-archive" => Some(Egg) // added for backward compatibility
+    case m if m.value == "python-archive" => Some(Egg) // added for backward compatibility
+    case _ => None
+  }
+}
+
+// Both a response and used to track job progress
+// NOTE: if endTime is not None, then the job has finished.
+case class JobInfo(jobId: String, contextId: String, contextName: String, mainClass: String, state: String,
+                   startTime: ZonedDateTime, endTime: Option[ZonedDateTime],
+                   error: Option[ErrorData], cp: Seq[BinaryInfo],
+                   callbackUrl: Option[Uri] = None) {
+
+  def jobLengthMillis: Option[Long] = endTime.map { end => ChronoUnit.MILLIS.between(startTime, end) }
+}
+
+trait ContextUnModifiableAttributes {
+  def id: String
+  def name: String
+  def config: String
+  def startTime: ZonedDateTime
+}
+
+trait ContextModifiableAttributes {
+  def actorAddress: Option[String]
+  def endTime: Option[ZonedDateTime]
+  def state: String
+  def error: Option[Throwable]
+}
+
+case class ContextInfo(id: String, name: String,
+                       config: String, actorAddress: Option[String],
+                       startTime: ZonedDateTime, endTime: Option[ZonedDateTime],
+                       state: String, error: Option[Throwable])
+  extends ContextUnModifiableAttributes with ContextModifiableAttributes with Equals {
+
+  // Meaningful comparison of contextInfos with throwables
+  override def hashCode(): Int = {
+    val prime = 41
+    prime * (prime * (prime * (prime * (prime * (prime * (prime * (prime
+      + id.hashCode) + name.hashCode) + config.hashCode) + actorAddress.hashCode)
+      + startTime.hashCode) + endTime.hashCode) + state.hashCode) + error.hashCode
+  }
+
+  override def equals(other: Any): Boolean = {
+    other match {
+      case that: spark.jobserver.io.ContextInfo => (id == that.id
+        && name == that.name && config == that.config
+        && actorAddress == that.actorAddress && startTime == that.startTime
+        && endTime == that.endTime && state == that.state
+        && error.map(e => e.getMessage) == that.error.map(e => e.getMessage))
+      case _ => false
+    }
+  }
+
+}
+
+object ContextInfoModifiable {
+  def apply(state: String): ContextInfoModifiable = new ContextInfoModifiable(state)
+  def apply(state: String, error: Option[Throwable]): ContextInfoModifiable =
+    new ContextInfoModifiable(state, error)
+
+  def getEndTime(state: String): Option[ZonedDateTime] = {
+    ContextStatus.getFinalStates().contains(state) match {
+      case true => Some(ZonedDateTime.now())
+      case false => None
+    }
+  }
+}
+
+case class ContextInfoModifiable(actorAddress: Option[String],
+                                 endTime: Option[ZonedDateTime],
+                                 state: String,
+                                 error: Option[Throwable]) extends ContextModifiableAttributes {
+  def this(state: String) = this(None, ContextInfoModifiable.getEndTime(state), state, None)
+  def this(state: String, error: Option[Throwable]) =
+    this(None, ContextInfoModifiable.getEndTime(state), state, error)
+}
+
+// Uniquely identifies the binary used to run a job
+case class BinaryInfo(appName: String,
+                      binaryType: BinaryType,
+                      uploadTime: ZonedDateTime,
+                      binaryStorageId: Option[String] = None)
+
+object JobStatus {
+  val Running = "RUNNING"
+  val Error = "ERROR"
+  val Finished = "FINISHED"
+  val Started = "STARTED"
+  val Killed = "KILLED"
+  val Restarting = "RESTARTING"
+  def getFinalStates(): Seq[String] = Seq(Error, Finished, Killed)
+  def getNonFinalStates(): Seq[String] = Seq(Started, Running, Restarting)
+}
+
+object ContextStatus {
+  val Running = "RUNNING"
+  val Error = "ERROR"
+  val Stopping = "STOPPING"
+  val Finished = "FINISHED"
+  val Started = "STARTED"
+  val Killed = "KILLED"
+  val Restarting = "RESTARTING"
+  def getFinalStates(): Seq[String] = Seq(Error, Finished, Killed)
+  def getNonFinalStates(): Seq[String] = Seq(Started, Running, Stopping, Restarting)
+}

@@ -1,7 +1,6 @@
 package spark.jobserver
 
-import org.joda.time.DateTime
-import spark.jobserver.japi.{BaseJavaJob, JSparkJob}
+import spark.jobserver.japi.BaseJavaJob
 
 import scala.language.existentials
 
@@ -16,24 +15,22 @@ case class JavaJarInfo(job: BaseJavaJob[_, _],
                        jarFilePath: String) extends BinaryJobInfo
 
 // For python jobs, there is no class loading or constructor required.
-case class PythonJobInfo(eggPath: String) extends BinaryJobInfo
+case class PythonJobInfo(packagePath: String) extends BinaryJobInfo
 
 trait JobCache {
   /**
    * Retrieves the given SparkJob class from the cache if it's there, otherwise use the DAO to retrieve it.
-   * @param appName the appName under which the binary was uploaded
-   * @param uploadTime the upload time for the version of the binary wanted
-   * @param classPath the fully qualified name of the class/object to load
+   * @param classPath the sequence of binary paths/names
+   * @param mainClass the fully qualified name of the class/object to load
    */
-  def getSparkJob(appName: String, uploadTime: DateTime, classPath: String): JobJarInfo
+  def getSparkJob(classPath: Seq[String], mainClass: String): JobJarInfo
 
-  def getJavaJob(appName: String, uploadTime: DateTime, classPath: String): JavaJarInfo
+  def getJavaJob(classPath: Seq[String], mainClass: String): JavaJarInfo
   /**
-    * Retrieves a Python job egg location from the cache if it's there, otherwise use the DAO to retrieve it.
-    * @param appName the appName under which the binary was uploaded
-    * @param uploadTime the upload time for the version of the binary wanted
-    * @param classPath the fully qualified name of the class/object to load
+    * Retrieves a Python job location from the cache if it's there, otherwise use the DAO to retrieve it.
+    * @param classPath the sequence of binary paths/names
+    * @param mainClass the fully qualified name of the class/object to load
     * @return The case class containing the location of the binary file for the specified job.
     */
-  def getPythonJob(appName: String, uploadTime: DateTime, classPath: String): PythonJobInfo
+  def getPythonJob(classPath: Seq[String], mainClass: String): PythonJobInfo
 }

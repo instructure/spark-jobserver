@@ -4,9 +4,10 @@ import java.io.File
 
 import com.typesafe.config.{Config, ConfigFactory}
 import org.apache.spark.SparkConf
-import org.joda.time.DateTime
 import spark.jobserver._
 import spark.jobserver.api.JobEnvironment
+import spark.jobserver.util.JobserverConfig
+
 import scala.concurrent.duration.FiniteDuration
 
 case class DummyJobEnvironment(jobId: String, contextConfig: Config) extends JobEnvironment {
@@ -70,20 +71,20 @@ object PythonSparkContextFactorySpec {
   lazy val jobServerAPIExamplePath = jobServerPaths.find(_.getAbsolutePath.contains("examples"))
 
   lazy val pysparkPath = sys.env.get("SPARK_HOME").map(d => s"$d/python/lib/pyspark.zip")
-  lazy val py4jPath = sys.env.get("SPARK_HOME").map(d => s"$d/python/lib/py4j-0.10.4-src.zip")
+  lazy val py4jPath = sys.env.get("SPARK_HOME").map(d => s"$d/python/lib/py4j-0.10.7-src.zip")
   lazy val originalPythonPath = sys.env.get("PYTHONPATH")
 
   case object DummyJobCache extends JobCache {
 
-    override def getSparkJob(appName: String, uploadTime: DateTime, classPath: String): JobJarInfo =
+    override def getSparkJob(appName: Seq[String], classPath: String): JobJarInfo =
       sys.error("Not Implemented")
 
-    override def getJavaJob(appName: String, uploadTime: DateTime, classPath: String): JavaJarInfo =
+    override def getJavaJob(appName: Seq[String], classPath: String): JavaJarInfo =
       sys.error("No Implemented :(")
 
-    override def getPythonJob(appName: String, uploadTime: DateTime, classPath: String): PythonJobInfo = {
+    override def getPythonJob(appName: Seq[String], classPath: String): PythonJobInfo = {
       val path =
-        if (appName == "test") {
+        if (appName == Seq("test")) {
           "/tmp/test.egg"
         } else {
           jobServerAPIExamplePath.getOrElse(sys.error("job server examples path not found")).getAbsolutePath
@@ -102,7 +103,8 @@ object PythonSparkContextFactorySpec {
        |  "${originalPythonPath.getOrElse("")}"
        |]
        |
-      |python.executable = "python"
+      |python.executable = "${sys.env.getOrElse("PYTHON_EXECUTABLE", "python3")}"
+      |${JobserverConfig.IS_SPARK_SESSION_HIVE_ENABLED} = true
     """.replace("\\", "\\\\") // Windows-compatibility
       .stripMargin)
 

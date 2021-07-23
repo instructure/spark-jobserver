@@ -1,10 +1,12 @@
 package spark.jobserver.common.akka.web
 
-import org.joda.time.DateTime
-import org.scalatest.{Matchers, FunSpec}
 import spray.json.JsonParser.ParsingException
 
-class JsonUtilsSpec extends FunSpec with Matchers {
+import java.time.ZonedDateTime
+import org.scalatest.funspec.AnyFunSpec
+import org.scalatest.matchers.should.Matchers
+
+class JsonUtilsSpec extends AnyFunSpec with Matchers {
   import spray.json._
   import spray.json.DefaultJsonProtocol._
 
@@ -65,7 +67,7 @@ class JsonUtilsSpec extends FunSpec with Matchers {
     it("should serialize unknown types to their string representations") {
       val expected = "[1,2,\"" + Dt1 + "\"]"
       import JsonUtils._
-      Seq(1, 2, DateTime.parse(Dt1)).toJson.compactPrint should equal (expected)
+      Seq(1, 2, ZonedDateTime.parse(Dt1)).toJson.compactPrint should equal (expected)
     }
 
     it("should serialize java.util.Maps as similarly to scala Maps") {

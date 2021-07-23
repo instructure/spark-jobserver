@@ -18,7 +18,8 @@ from __future__ import print_function
 import sys
 import os
 from importlib import import_module
-from py4j.java_gateway import JavaGateway, java_import, GatewayClient
+from py4j.java_gateway import JavaGateway, java_import, \
+    GatewayClient, GatewayParameters
 from pyhocon import ConfigFactory
 from pyspark.context import SparkContext, SparkConf
 from pyspark.sql import SQLContext, HiveContext, SparkSession
@@ -53,7 +54,11 @@ def import_class(cls):
 
 if __name__ == "__main__":
     port = int(sys.argv[1])
-    gateway = JavaGateway(GatewayClient(port=port), auto_convert=True)
+    auth_token = sys.argv[2]
+    gateway_parameters = GatewayParameters(
+        port=port, auto_convert=True, auth_token=auth_token)
+    gateway = JavaGateway(
+        gateway_parameters=gateway_parameters, auto_convert=True)
     entry_point = gateway.entry_point
     imports = entry_point.getPy4JImports()
     for i in imports:
@@ -100,14 +105,13 @@ if __name__ == "__main__":
             exit_with_failure(
                     "Expected JavaSparkContext, SQLContext "
                     "or HiveContext but received %s" % repr(context_class), 2)
-
-    egg_path = os.environ.get("EGGPATH", None)
-    if egg_path and sc:
+    package_path = os.environ.get("PACKAGEPATH", None)
+    if package_path and sc:
         try:
-            sc.addPyFile(egg_path)
+            sc.addPyFile(package_path)
         except Exception as error:
             exit_with_failure(
-                "Error while adding Python Egg to Spark Context: %s\n%s" %
+                "Error while adding Python package to Spark Context: %s\n%s" %
                 (repr(error), traceback.format_exc()), 5)
     try:
         job_data = job.validate(context, None, job_config)

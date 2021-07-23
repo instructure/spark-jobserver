@@ -2,10 +2,9 @@ package spark.jobserver
 
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.storage.StorageLevel
-import java.util.concurrent.TimeoutException
+import java.util.concurrent.{Semaphore, TimeoutException}
 
 import scala.concurrent.duration._
-
 import org.apache.spark.rdd.RDD
 import com.typesafe.config.Config
 import spark.jobserver.common.akka.AkkaTestUtils
@@ -52,30 +51,29 @@ class JobWithNamedRddsSpec extends JobSpecBase(JobManagerActorSpec.getNewSystem)
     }
 
     it("get() should respect timeout when rdd is known, but not yet available") {
-
+      val semaphore = new Semaphore(-1)
       var rdd : Option[RDD[Int]] = None
       val thread = new Thread {
         override def run() {
-          namedTestRdds.getOrElseCreate("rdd-sleep", {
-            val t1 = System.currentTimeMillis()
-            var x = 0d
-            for (i <- 1 to 1000000) { x = x + Math.exp(1d + i) }
-            val t2 = System.currentTimeMillis()
-            //System.err.println("waking up: " + x + ", duration: " + (t2 - t1))
-            val r = sc.parallelize(Seq(1, 2, 3))
-            rdd = Some(r)
-            r
-          })(1.milliseconds)
+          intercept[TimeoutException] {
+            namedTestRdds.getOrElseCreate("rdd-sleep", {
+              Thread.sleep(2000)
+              val r = sc.parallelize(Seq(1, 2, 3))
+              rdd = Some(r)
+              r
+            })(1.milliseconds)
+          }
+          semaphore.release(2)
         }
       }
       thread.start()
-      Thread.sleep(11)
-      //don't wait
+      semaphore.acquire() // Wait for the thread to start calculations.
+      // RDD is still computing, check that without waiting (1.millisecond) timeout exception is raised
       val err = intercept[TimeoutException] { namedTestRdds.get[Int]("rdd-sleep")(1.milliseconds) }
       err.getClass should equal(classOf[TimeoutException])
-      //now wait
+      // now wait for RDD to be computed
       namedTestRdds.get[Int]("rdd-sleep")(FiniteDuration(5, SECONDS)) should equal(Some(rdd.get))
-      //clean-up
+      // clean-up
       namedTestRdds.destroy("rdd-sleep")
     }
 

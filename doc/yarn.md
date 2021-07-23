@@ -1,3 +1,16 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Configuring Job Server for YARN in client mode with docker](#configuring-job-server-for-yarn-in-client-mode-with-docker)
+  - [Configuring the Spark-Jobserver Docker package to run in Yarn-Client Mode](#configuring-the-spark-jobserver-docker-package-to-run-in-yarn-client-mode)
+  - [Modifying the start-server.sh script](#modifying-the-start-serversh-script)
+  - [Modifying the &lt;environment&gt;.sh script](#modifying-the-ltenvironmentgtsh-script)
+  - [Important Context Settings for yarn](#important-context-settings-for-yarn)
+  - [ClassNotFoundException: org.apache.spark.deploy.yarn.YarnSparkHadoopUtil](#classnotfoundexception-orgapachesparkdeployyarnyarnsparkhadooputil)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 ## Configuring Job Server for YARN in client mode with docker
 
 See also running in [cluster mode](cluster.md), running [YARN on EMR](EMR.md) and running on [Mesos](mesos.md).
@@ -28,7 +41,7 @@ Example docker.conf:
         jobdao = spark.jobserver.io.JobSqlDAO
 
         sqldao {
-          # Directory where default H2 driver stores its data. Only needed for H2.
+          # Directory where binaries are cached and default H2 driver stores its data
           rootdir = /database
 
           # Full JDBC URL / init string.  Sorry, needs to match above.
@@ -123,6 +136,16 @@ The _start-server.sh_ script does not contain a ```--master``` option. In some c
 
 ```
 --master yarn-client
+```
+
+### Modifying the &lt;environment&gt;.sh script
+Replace `MANAGER_*` variables with
+```
+MANAGER_JAR_FILE="$appdir/spark-job-server.jar"
+MANAGER_CONF_FILE="$(basename $conffile)"
+MANAGER_EXTRA_JAVA_OPTIONS=
+MANAGER_EXTRA_SPARK_CONFS="spark.yarn.submit.waitAppCompletion=false|spark.files=$appdir/log4jcluster.properties,$conffile"
+MANAGER_LOGGING_OPTS="-Dlog4j.configuration=log4j-cluster.properties"
 ```
 
 ### Important Context Settings for yarn

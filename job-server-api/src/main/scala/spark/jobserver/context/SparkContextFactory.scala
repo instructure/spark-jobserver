@@ -2,7 +2,6 @@ package spark.jobserver.context
 
 import com.typesafe.config.Config
 import org.apache.spark.{SparkConf, SparkContext}
-import org.joda.time.DateTime
 import org.scalactic._
 import org.slf4j.LoggerFactory
 import spark.jobserver.{ContextLike, JobCache, SparkJob}
@@ -17,7 +16,7 @@ trait JobContainer {
 sealed trait LoadingError
 case object JobClassNotFound extends LoadingError
 case object JobWrongType extends LoadingError
-case class JobLoadError(ex: Exception) extends LoadingError
+case class JobLoadError(t: Throwable) extends LoadingError
 
 /**
   * Factory trait for creating a SparkContext or any derived Contexts,
@@ -38,9 +37,8 @@ trait SparkContextFactory {
     * the right type of job given the current context type.  For example, it may load a JAR
     * and validate the classpath exists and try to invoke its constructor.
     */
-  def loadAndValidateJob(appName: String,
-                         uploadTime: DateTime,
-                         classPath: String,
+  def loadAndValidateJob(classPath: Seq[String],
+                         mainClass: String,
                          jobCache: JobCache): J Or LoadingError
 
   /**
@@ -63,6 +61,10 @@ trait SparkContextFactory {
     val sparkConf = configToSparkConf(config, contextConfig, contextName)
     makeContext(sparkConf, contextConfig, contextName)
   }
+
+  def updateConfig(config: Config): Config = config
+
+  def runsPython: Boolean = false
 }
 
 case class ScalaJobContainer(job: api.SparkJobBase) extends JobContainer {
@@ -77,20 +79,19 @@ trait ScalaContextFactory extends SparkContextFactory {
 
   val logger = LoggerFactory.getLogger(getClass)
 
-  def loadAndValidateJob(appName: String,
-                         uploadTime: DateTime,
-                         classPath: String,
+  def loadAndValidateJob(classPath: Seq[String],
+                         mainClass: String,
                          jobCache: JobCache): J Or LoadingError = {
-    logger.info("Loading class {} for app {}", classPath, appName: Any)
+    logger.info("Loading class {} for app {}", mainClass, classPath: Any)
     try {
-      val jobJarInfo = jobCache.getSparkJob(appName, uploadTime, classPath)
+      val jobJarInfo = jobCache.getSparkJob(classPath, mainClass)
       val job = jobJarInfo.constructor()
 
       // Validate that job fits the type of context we launched
       if (isValidJob(job)) Good(ScalaJobContainer(job)) else Bad(JobWrongType)
     } catch {
       case _: ClassNotFoundException => Bad(JobClassNotFound)
-      case err: Exception => Bad(JobLoadError(err))
+      case t: Throwable => Bad(JobLoadError(t))
     }
   }
 
@@ -109,20 +110,19 @@ trait JavaContextFactory extends SparkContextFactory {
 
   val logger = LoggerFactory.getLogger(getClass)
 
-  def loadAndValidateJob(appName: String,
-                         uploadTime: DateTime,
-                         classPath: String,
+  def loadAndValidateJob(classPath: Seq[String],
+                         mainClass: String,
                          jobCache: JobCache): J Or LoadingError = {
-    logger.info("Loading class {} for app {}", classPath, appName: Any)
+    logger.info("Loading class {} for app {}", mainClass, classPath: Any)
     try {
-      val jobJarInfo = jobCache.getJavaJob(appName, uploadTime, classPath)
+      val jobJarInfo = jobCache.getJavaJob(classPath, mainClass)
       val job = jobJarInfo.job
 
       // Validate that job fits the type of context we launched
       if (isValidJob(job)) Good(ScalaJobContainer(JavaJob(job))) else Bad(JobWrongType)
     } catch {
       case _: ClassNotFoundException => Bad(JobClassNotFound)
-      case err: Exception => Bad(JobLoadError(err))
+      case t: Throwable => Bad(JobLoadError(t))
     }
   }
 

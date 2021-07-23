@@ -36,18 +36,19 @@ Also see [Chinese docs / 中文](doc/chinese/job-server.md).
   - [HTTPS / SSL Configuration](#https--ssl-configuration)
     - [Server authentication](#server-authentication)
     - [Client authentication](#client-authentication)
-  - [Basic authentication](#basic-authentication)
+  - [Access Control](#access-control)
+    - [Shiro Authentication](#shiro-authentication)
+    - [Keycloak Authentication](#keycloak-authentication)
+  - [User Authorization](#user-authorization)
 - [Deployment](#deployment)
   - [Manual steps](#manual-steps)
   - [Context per JVM](#context-per-jvm)
-    - [Configuring Spark Jobserver H2 Database backend](#configuring-spark-jobserver-h2-database-backend)
-    - [Configuring Spark Jobserver PostgreSQL Database backend](#configuring-spark-jobserver-postgresql-database-backend)
-    - [Configuring Spark Jobserver MySQL Database backend](#configuring-spark-jobserver-mysql-database-backend)
+  - [Configuring Spark Jobserver backend](#configuring-spark-jobserver-backend)
+  - [HA Deployment (beta)](#ha-deployment-beta)
   - [Chef](#chef)
 - [Architecture](#architecture)
 - [API](#api)
   - [Binaries](#binaries)
-  - [Jars (deprecated)](#jars-deprecated)
   - [Contexts](#contexts)
   - [Jobs](#jobs)
   - [Data](#data)
@@ -58,7 +59,6 @@ Also see [Chinese docs / 中文](doc/chinese/job-server.md).
   - [HTTP Override](#http-override)
 - [Clients](#clients)
 - [Contribution and Development](#contribution-and-development)
-  - [Publishing packages](#publishing-packages)
 - [Contact](#contact)
 - [License](#license)
 - [TODO](#todo)
@@ -69,7 +69,7 @@ Also see [Chinese docs / 中文](doc/chinese/job-server.md).
 
 (Please add yourself to this list!)
 
-Spark Job Server is now included in Datastax Enterprise 4.8!
+Spark Job Server is included in Datastax Enterprise!
 
 - [Ooyala](http://www.ooyala.com)
 - [Netflix](http://www.netflix.com)
@@ -91,6 +91,8 @@ Spark Job Server is now included in Datastax Enterprise 4.8!
 - [Planalytics](http://www.planalytics.com)
 - [Target](http://www.target.com/)
 - [Branch](http://branch.io)
+- [Informatica](https://www.informatica.com/)
+- [Cadenz.ai](https://cadenz.ai/)
 
 ## Features
 
@@ -107,26 +109,28 @@ Spark Job Server is now included in Datastax Enterprise 4.8!
 - Works with Standalone Spark as well on [cluster](doc/cluster.md), [Mesos](doc/mesos.md), YARN [client](doc/yarn.md) and [on EMR](doc/EMR.md))
 - Job and jar info is persisted via a pluggable DAO interface
 - Named Objects (such as RDDs or DataFrames) to cache and retrieve RDDs or DataFrames by name, improving object sharing and reuse among jobs.
-- Supports Scala 2.10 and 2.11
+- Supports Scala 2.11 and 2.12
+- Support for supervise mode of Spark (EXPERIMENTAL)
+- Possible to be deployed in an [HA setup](#ha-deployment-beta) of multiple jobservers (beta)
 
 ## Version Information
 
-| Version     | Spark Version |
-|-------------|---------------|
-| 0.3.1       | 0.9.1         |
-| 0.4.0       | 1.0.2         |
-| 0.4.1       | 1.1.0         |
-| 0.5.0       | 1.2.0         |
-| 0.5.1       | 1.3.0         |
-| 0.5.2       | 1.3.1         |
-| 0.6.0       | 1.4.1         |
-| 0.6.1       | 1.5.2         |
-| 0.6.2       | 1.6.1         |
-| 0.7.0       | 1.6.2         |
-| 0.8.0       | 2.2.0    |
-| 0.8.1-SNAPSHOT | 2.2.0 |
+| Version     | Spark Version | Scala Version |
+|-------------|---------------|---------------|
+| 0.8.1       | 2.2.0         | 2.11          |
+| 0.10.2      | 2.4.4         | 2.11          |
+| 0.11.1      | 2.4.4         | 2.11, 2.12    |
 
 For release notes, look in the `notes/` directory.
+
+[Due to the sunset of Bintray](https://jfrog.com/blog/into-the-sunset-bintray-jcenter-gocenter-and-chartcenter/) all previous release binaries were deleted. Jobserver had to migrate to JFrog Platform and only recent releases are available there.
+To use Spark Jobserver in your SBT project please include the following resolver in you `build.sbt` file:
+
+```scala
+resolvers += "Artifactory" at "https://sparkjobserver.jfrog.io/artifactory/jobserver/"
+```
+
+Check [Creating a project manually assuming that you already have sbt project structure](#creating-a-project-manually-assuming-that-you-already-have-sbt-project-structure) for more information.
 
 If you need non-released jars, please visit [Jitpack](https://jitpack.io) - they provide non-release jar builds for any Git repo.  :)
 
@@ -180,7 +184,7 @@ Then go ahead and start the job server using the instructions above.
 
 Let's upload the jar:
 
-    curl --data-binary @job-server-tests/target/scala-2.10/job-server-tests-$VER.jar localhost:8090/jars/test
+    curl -X POST localhost:8090/binaries/test -H "Content-Type: application/java-archive" --data-binary @job-server-tests/target/scala-2.12/job-server-tests_2.12-$VER.jar
     OK⏎
 
 #### Ad-hoc Mode - Single, Unrelated Jobs (Transient Context)
@@ -278,7 +282,7 @@ spark {
     context-init-timeout = 1000000 s
   }
 }
-spray.can.server {
+akka.http.server {
       # Debug timeouts
       idle-timeout = infinite
       request-timeout = infinite
@@ -307,13 +311,13 @@ Now you could remove example application and start adding your one.
 ### Creating a project manually assuming that you already have sbt project structure
 In your `build.sbt`, add this to use the job server jar:
 
-        resolvers += "Job Server Bintray" at "https://dl.bintray.com/spark-jobserver/maven"
+        resolvers += "Artifactory" at "https://sparkjobserver.jfrog.io/artifactory/jobserver/"
 
-        libraryDependencies += "spark.jobserver" %% "job-server-api" % "0.8.0" % "provided"
+        libraryDependencies += "spark.jobserver" %% "job-server-api" % "0.11.1" % "provided"
 
 If a SQL or Hive job/context is desired, you also want to pull in `job-server-extras`:
 
-    libraryDependencies += "spark.jobserver" %% "job-server-extras" % "0.8.0" % "provided"
+    libraryDependencies += "spark.jobserver" %% "job-server-extras" % "0.11.1" % "provided"
 
 For most use cases it's better to have the dependencies be "provided" because you don't want SBT assembly to include the whole job server jar.
 
@@ -353,7 +357,7 @@ object WordCountExampleNewApi extends NewSparkJob {
 }
 ```
 
-It is much more type safe, separates context configuration, job ID, named objects, and other environment variables into a separate JobEnvironment input, and allows the validation method to return specific data for the runJob method.  See the [WordCountExample](job-server-tests/src/spark.jobserver/WordCountExample.scala) and [LongPiJob](job-server-tests/src/spark.jobserver/LongPiJob.scala) for examples.
+It is much more type safe, separates context configuration, job ID, named objects, and other environment variables into a separate JobEnvironment input, and allows the validation method to return specific data for the runJob method.  See the [WordCountExample](job-server-tests/src/main/scala/spark/jobserver/WordCountExample.scala) and [LongPiJob](job-server-tests/src/main/scala/spark/jobserver/LongPiJob.scala) for examples.
 
 Let's try running our sample job with an invalid configuration:
 
@@ -408,7 +412,7 @@ object WordCountExampleSparkSession extends SparkSessionJob {
 
 ### Dependency jars
 
-You have a couple options to package and upload dependency jars.
+For Java/Scala applications you have a couple options to package and upload dependency jars.
 
 * The easiest is to use something like [sbt-assembly](https://github.com/sbt/sbt-assembly) to produce a fat jar.  Be sure to mark the Spark and job-server dependencies as "provided" so it won't blow up the jar size.  This works well if the number of dependencies is not large.
 * When the dependencies are sizeable and/or you don't want to load them with every different job, you can package the dependencies separately and use one of several options:
@@ -425,8 +429,17 @@ You have a couple options to package and upload dependency jars.
         }'
         ````
         The jars /myjars/deps01.jar & /myjars/deps02.jar (present only on the SJS node) will be loaded and made available for the Spark driver & executors.
+        Please note that only only `file`, `local`, `ftp`, `http` protocols will work (URIs will be added to standard java class loader).
+        Recent changes also allow to use names of the binaries, which were uploaded to Jobserver.
     - Use the `--package` option with Maven coordinates with `server_start.sh`.
-    - Put the extra jars in the SPARK_CLASSPATH
+    - Recent changes also allow you to use new parameters for the `POST /jobs` request:
+      ````
+      POST /jobs?cp=someURI,binName1,binName2&mainClass=some.main.Class
+      ````
+      `cp` accepts list of binary names (under which you uploaded binary to Jobserver) and URIs,
+      `mainClass` is the main class of your application.
+      Main advantage of this approach in comparison to using `dependent-jar-uris` is that you don't need to
+      specify which jar is the main one and can just send all of needed jars in one list.
 
 ### Named Objects
 #### Using Named RDDs
@@ -503,7 +516,7 @@ def validate(sc:SparkContext, config: Config): SparkJobValidation = {
 
 ### HTTPS / SSL Configuration
 #### Server authentication
-To activate server authentication and ssl communication, set these flags in your application.conf file (Section 'spray.can.server'):
+To activate server authentication and ssl communication, set these flags in your application.conf file (Section 'akka.http.server'):
 ```
   ssl-encryption = on
   # absolute path to keystore file
@@ -532,13 +545,28 @@ The minimum set of parameters to enable client authentication consists of:
 ```
 Note, client authentication implies server authentication, therefore client authentication will only be enabled once server authentication is activated.
 
-### Basic authentication
-Basic authentication (username and password) in Job Server relies on the [Apache Shiro](http://shiro.apache.org/index.html) framework. 
-Basic authentication is activated by setting this flag (Section 'shiro'):
+### Access Control
+By default, access to the Job Server is not limited. Basic authentication (username and password) support is provided
+via the [Apache Shiro](http://shiro.apache.org/index.html) framework or [Keycloak](https://www.keycloak.org/). Both
+authentication frameworks have to be explicitly activated in the configuration file. 
+
+After the configuration, you can provide credentials via basic auth. Here is an example of a simple curl command that
+authenticates a user and uses ssl (you may want to use -H to hide the credentials, this is just a simple example to get
+you started):
 ```
-authentication = on
-# absolute path to shiro config file, including file name
-config.path = "/some/path/shiro.ini"
+curl -k --basic --user 'user:pw' https://localhost:8090/contexts
+```
+
+#### Shiro Authentication
+The Shiro Authenticator can be activated in the configuration file by changing the authentication provider and
+providing a shiro configuration file.
+```
+access-control {
+  provider = spark.jobserver.auth.ShiroAccessControl
+
+  # absolute path to shiro config file, including file name
+  shiro.config.path = "/some/path/shiro.ini"
+}
 ```
 Shiro-specific configuration options should be placed into a file named 'shiro.ini' in the directory as specified by the config option 'config.path'.
 Here is an example that configures LDAP with user group verification:
@@ -562,11 +590,46 @@ securityManager.cacheManager = $cacheManager
 
 Make sure to edit the url, credentials, userDnTemplate, ldap.allowedGroups and ldap.searchBase settings in accordance with your local setup.
 
-Here is an example of a simple curl command that authenticates a user and uses ssl (you may want to use -H to hide the
-credentials, this is just a simple example to get you started):
+The Shiro authenticator is able to perform fine-grained [user authorization](#user-authorization). Permissions are
+extracted from the provided user roles. Each role that matches a known permission is added to the authenticated user.
+Unknown roles are ignored. For a list of available permissions see [Permissions](doc/permissions.md).
+
+#### Keycloak Authentication
+The Keycloak Authenticator can be activated in the configuration file by changing the authentication provider and
+providing a keycloak configuration.
 ```
-curl -k --basic --user 'user:pw' https://localhost:8090/contexts
+access-control {
+  provider = spark.jobserver.auth.KeycloakAccessControl
+
+  keycloak {
+    authServerUrl = "https://example.com"
+    realmName = "master"
+    client = "client"
+    clientSecret = "secret"
+  }
+}
 ```
+| Name          | Description                                | Mandatory |
+|---------------|--------------------------------------------|-----------|
+| authServerUrl | The URL to reach the keycloak instance.    | yes       |
+| realmName     | The realm to authenticate against.         | yes       |
+| client        | The client to authenticate against.        | yes       |
+| clientSecret  | An according client secret, if it exists.  | no        |
+
+For better performance, authentication requests against Keycloak can be cached locally.
+
+The Keycloak authenticator is able to perform fine-grained [user authorization](#user-authorization). Permissions are
+extracted from the provided client's roles. Each client role that matches a known permission is added to the
+authenticated user. Unknown client roles are ignored. For a list of available permissions see
+[Permissions](doc/permissions.md).
+
+*Important:* If no client role matches a permission, the user is assigned the `ALLOW_ALL` role.
+
+### User Authorization
+Spark job server implements a basic authorization management system to control access to single resources. By default,
+users always have access to all resources (`ALLOW_ALL`). Authorization is implemented by checking the *permissions* of a
+user with the required permissions of an endpoint. For a detailed list of all available permissions see
+[Permissions](doc/permissions.md).
 
 ## Deployment
 
@@ -575,7 +638,7 @@ See also running on [cluster](doc/cluster.md), [YARN client](doc/yarn.md), on [E
 ### Manual steps
 
 1. Copy `config/local.sh.template` to `<environment>.sh` and edit as appropriate.  NOTE: be sure to set SPARK_VERSION if you need to compile against a different version.
-2. Copy `config/shiro.ini.template` to `shiro.ini` and edit as appropriate. NOTE: only required when `authentication = on`
+2. Copy `config/shiro.ini.template` to `shiro.ini` and edit as appropriate. NOTE: only required when `access-control.provider = spark.jobserver.auth.ShiroAccessControl`
 3. Copy `config/local.conf.template` to `<environment>.conf` and edit as appropriate.
 4. `bin/server_deploy.sh <environment>` -- this packages the job server along with config files and pushes
    it to the remotes you have configured in `<environment>.sh`
@@ -587,8 +650,8 @@ NOTE: Under the hood, the deploy scripts generate an assembly jar from the `job-
 
 ### Context per JVM
 
-Each context can be a separate process launched using spark-submit, via the included `manager_start.sh` script, if `context-per-jvm` is set to true.
-You may want to set `deploy.manager-start-cmd` to the correct path to your start script and customize the script.  This can be especially desirable when you want to run many contexts at once, or for certain types of contexts such as StreamingContexts which really need their own processes.
+Each context can be a separate process launched using SparkLauncher, if `context-per-jvm` is set to true.
+This can be especially desirable when you want to run many contexts at once, or for certain types of contexts such as StreamingContexts which really need their own processes.
 
 Also, the extra processes talk to the master HTTP process via random ports using the Akka Cluster gossip protocol.  If for some reason the separate processes causes issues, set `spark.jobserver.context-per-jvm` to `false`, which will cause the job server to use a single JVM for all contexts.
 
@@ -600,154 +663,18 @@ Log files are separated out for each context (assuming `context-per-jvm` is `tru
 Note: to test out the deploy to a local staging dir, or package the job server for Mesos,
 use `bin/server_package.sh <environment>`.
 
-#### Configuring Spark Jobserver H2 Database backend
-By default, H2 database is used for storing Spark Jobserver related meta data.
-This can be overridden if you prefer to use PostgreSQL or MySQL.
-It is also important that any dependent jars are to be added to Job Server class path.
+### Configuring Spark Jobserver backend
 
-To use embedded H2 as backend add the following configuration to local.conf.
+Please visit [setting up dao](doc/dao-setup.md) documentation page. Currently supported backend options:
+- H2
+- MySQL
+- PostgreSQL
+- HDFS for binaries with Zookeeper for metadata
+- HDFS for binaries with H2/MySQL/PostgreSQL for metadata
 
-    spark {
-      jobserver {
-        ...
-        sqldao {
-          # Slick database driver, full classpath
-          slick-driver = slick.driver.H2Driver
+### HA Deployment (beta)
 
-          # JDBC driver, full classpath
-          jdbc-driver = org.h2.Driver
-
-          # Directory where default H2 driver stores its data. Only needed for H2.
-          rootdir = "/var/spark-jobserver/sqldao/data"
-
-          jdbc {
-            url = "jdbc:h2:file:/var/spark-jobserver/sqldao/data/h2-db"
-            user = "secret"
-            password = "secret"
-          }
-
-          dbcp {
-            maxactive = 20
-            maxidle = 10
-            initialsize = 10
-          }
-        }
-      }
-    }
-    # also add the following line at the root level.
-    flyway.locations="db/h2/migration"
-
-If you are using `context-per-jvm = true`, be sure to add [AUTO_MIXED_MODE](http://h2database.com/html/features.html#auto_mixed_mode) to your
-H2 JDBC URL; this allows multiple processes to share the same H2 database using a lock file.
-
-In a yarn-client mode if using H2 the below is advised.
-- Run H2 in server mode (http://www.h2database.com/html/download.html, and follow docs.,)
-Jdbc configuration should be like below:
-```
-jdbc {
-        url = "jdbc:h2:tcp://localhost/db_host/spark_jobserver"
-        user = "secret"
-        password = "secret"
-      }
-```
-
-#### Configuring Spark Jobserver PostgreSQL Database backend
-Ensure that you have spark_jobserver database created with necessary rights
-granted to user.
-
-    # create database user jobserver and database spark_jobserver:
-    $ createuser --username=<superuser> -RDIElPS jobserver
-    $ createdb -Ojobserver -Eutf8 spark_jobserver
-    CTRL-D -> logout from psql
-
-    # logon as superuser and enable the large object extension:
-    $ psql -U <superuser> spark_jobserver
-    spark_jobserver=# CREATE EXTENSION lo;
-    CTRL-D -> logout from psql
-
-    # you can connect to the database using the psql command line client:
-    $ psql -U jobserver spark_jobserver
-
-To use PostgreSQL as backend add the following configuration to local.conf.
-
-    spark {
-      jobserver {
-        ...
-        sqldao {
-          # Slick database driver, full classpath
-          slick-driver = slick.driver.PostgresDriver
-
-          # JDBC driver, full classpath
-          jdbc-driver = org.postgresql.Driver
-
-          # Directory where default H2 driver stores its data. Only needed for H2.
-          rootdir = "/var/spark-jobserver/sqldao/data"
-
-          jdbc {
-            url = "jdbc:postgresql://db_host/spark_jobserver"
-            user = "jobserver"
-            password = "secret"
-          }
-
-          dbcp {
-            maxactive = 20
-            maxidle = 10
-            initialsize = 10
-          }
-        }
-      }
-    }
-    # also add the following line at the root level.
-    flyway.locations="db/postgresql/migration"
-
-#### Configuring Spark Jobserver MySQL Database backend
-Ensure that you have spark_jobserver database created with necessary rights
-granted to user.
-
-    # secure your mysql installation and define password for mysql root user
-    $ mysql_secure_installation
-
-    # logon as database root
-    $ mysql -u root -p
-
-    # create a database user and a database for spark jobserver:
-    mysql> CREATE USER 'jobserver'@'localhost' IDENTIFIED BY 'secret';
-    mysql> CREATE DATABASE spark_jobserver;
-    mysql> GRANT ALL ON spark_jobserver.* TO 'jobserver'@'localhost';
-    mysql> FLUSH PRIVILEGES;
-    CTRL-D -> logout from mysql
-
-    # you can connect to the database using the mysql command line client:
-    $ mysql -u jobserver -p
-
-To use MySQL as backend add the following configuration to local.conf.
-
-    spark {
-      jobserver {
-        ...
-        sqldao {
-          # Slick database driver, full classpath
-          slick-driver = slick.driver.MySQLDriver
-
-          # JDBC driver, full classpath
-          jdbc-driver = com.mysql.jdbc.Driver
-
-          jdbc {
-            url = "jdbc:mysql://db_host/spark_jobserver"
-            user = "jobserver"
-            password = "secret"
-          }
-
-          dbcp {
-            maxactive = 20
-            maxidle = 10
-            initialsize = 10
-          }
-        }
-      }
-    }
-    # also add the following line at the root level.
-    flyway.locations="db/mysql/migration"
+It is possible to run multiple Spark Jobservers in a highly available setup. For a documentation of a Jobserver HA setup, refer to the [Jobserver HA documentation](doc/HA.md).
 
 ### Chef
 
@@ -769,27 +696,23 @@ Flow diagrams are checked in in the doc/ subdirectory.  .diagram files are for w
 
 ## API
 
+A comprehensive (manually created) swagger specification of the spark jobserver WebApi can be found [here](doc/WebApi/).
+
 ### Binaries
 
     GET /binaries               - lists all current binaries
+    GET /binaries /<appName>    - gets info about the last binary uploaded under this name (app-name, binary-type, upload-time)
     POST /binaries/<appName>    - upload a new binary file
     DELETE /binaries/<appName>  - delete defined binary
 
-When POSTing new binaries, the content-type header must be set to one of the types supported by the subclasses of the `BinaryType` trait. e.g. "application/java-archive" or application/python-archive". If you are using curl command, then you must pass "-H 'Content-Type: application/python-archive'" or "-H 'Content-Type: application/java-archive'".
-
-### Jars (deprecated)
-
-    GET /jars                   - lists all the jars and the last upload timestamp
-    POST /jars/<appName>        - uploads a new jar under <appName>
-
-These routes are kept for legacy purposes but are deprecated in favour of the /binaries routes
+When POSTing new binaries, the content-type header must be set to one of the types supported by the subclasses of the `BinaryType` trait. e.g. "application/java-archive",  "application/python-egg" or "application/python-wheel". If you are using curl command, then you must pass for example "-H 'Content-Type: application/python-wheel'".
 
 ### Contexts
 
     GET /contexts               - lists all current contexts
     GET /contexts/<name>        - gets info about a context, such as the spark UI url
     POST /contexts/<name>       - creates a new context
-    DELETE /contexts/<name>     - stops a context and all jobs running in it
+    DELETE /contexts/<name>     - stops a context and all jobs running in it. Additionally, you can pass ?force=true to stop a context forcefully. This is equivalent to killing the application from SparkUI (works for spark standalone only).
     PUT /contexts?reset=reboot  - shuts down all contexts and re-loads only the contexts from config. Use ?sync=false to execute asynchronously.
 
 Spark context configuration params can follow `POST /contexts/<name>` as query params. See section below for more details.
@@ -805,6 +728,8 @@ the REST API.
     GET /jobs/<jobId>        - Gets the result or status of a specific job
     DELETE /jobs/<jobId>     - Kills the specified job
     GET /jobs/<jobId>/config - Gets the job configuration
+
+For additional information on `POST /jobs` check out [submitting jobs documentation](doc/submitting-jobs.md).
 
 For details on the Typesafe config format used for input (JSON also works), see the [Typesafe Config docs](https://github.com/typesafehub/config).
 
@@ -887,7 +812,7 @@ User impersonation for an already Kerberos authenticated user is supported via `
 
   POST /contexts/my-new-context?spark.proxy.user=<user-to-impersonate>
 
-However, whenever the flag `shiro.use-as-proxy-user` is set to `on` (and authentication is `on`) then this parameter
+However, whenever the flag `access-control.shiro.use-as-proxy-user` is set to `on` (and Shiro is used as provider) then this parameter
 is ignored and the name of the authenticated user is *always* used as the value of the `spark.proxy.user`
 parameter when creating contexts.
 
@@ -907,6 +832,9 @@ To add to the underlying Hadoop configuration in a Spark context, add the hadoop
             mapreduce.framework.name = "Foo"
         }
     }
+
+`stop-context-on-job-error=true` can be passed to context if you want the context to stop immediately after first error is reported by a job. The default value is false but for StreamingContextFactory the default is true.
+You can also change the default value globally in application.conf `context-settings` section.
 
 For the exact context configuration parameters, see JobManagerActor docs as well as application.conf.
 
@@ -960,12 +888,21 @@ Spark Jobserver programmatically.
 Contributions via Github Pull Request are welcome. Please start by taking a look at the [contribution guidelines](doc/contribution-guidelines.md) and check the TODO for some contribution ideas.
 
 - If you need to build with a specific scala version use ++x.xx.x followed by the regular command,
-for instance: `sbt ++2.11.6 job-server/compile`
+for instance: `sbt ++2.12.12 job-server/compile`
 - From the "master" project, please run "test" to ensure nothing is broken.
    - You may need to set `SPARK_LOCAL_IP` to `localhost` to ensure Akka port can bind successfully
    - Note for Windows users: very few tests fail on Windows. Thus, run `testOnly -- -l WindowsIgnore` from SBT shell to ignore them.
-- Logging for tests goes to "job-server-test.log"
-- Run `scoverage:test` to check the code coverage and improve it.
+- Logging for tests goes to "job-server-test.log". To see test logging in console also, add the following to your log4j.properties (`job-server/src/test/resources/log4j.properties`)
+```$xslt
+log4j.rootLogger=INFO, LOGFILE, console
+
+log4j.appender.console=org.apache.log4j.ConsoleAppender
+log4j.appender.console.target=System.err
+log4j.appender.console.layout=org.apache.log4j.PatternLayout
+log4j.appender.console.layout.ConversionPattern=[%d] %-5p %.26c [%X{testName}] [%X{akkaSource}] - %m%n
+```
+- Run `sbt clean coverage test` to check the code coverage and improve it. You can generate reports by running
+`sbt coverageReport` or `sbt coverageAggregate` for the full overview.
   - Windows users: run `; coverage ; testOnly -- -l WindowsIgnore ; coverageReport` from SBT shell.
 - Please run scalastyle to ensure your code changes don't break the style guide.
 - Do "reStart" from SBT for quick restarts of the job server process
@@ -975,14 +912,6 @@ Profiling software generously provided by ![](https://www.yourkit.com/images/ykl
 
 YourKit supports open source projects with its full-featured [Java Profiler](https://www.yourkit.com/java/profiler/index.jsp).
 
-### Publishing packages
-
-In the root project, do `release cross`.
-
-To announce the release on [ls.implicit.ly](http://ls.implicit.ly/), use
-[Herald](https://github.com/n8han/herald#install) after adding release notes in
-the `notes/` dir.  Also regenerate the catalog with `lsWriteVersion` SBT task
-and `lsync`, in project job-server.
 
 ## Contact
 

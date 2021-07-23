@@ -7,12 +7,11 @@ import org.apache.spark.api.java.JavaSparkContext
 import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.sql.hive.HiveContext
 import org.apache.spark.{SparkConf, SparkContext}
-import org.joda.time.DateTime
 import org.scalactic.{Bad, Good, Or}
 import org.slf4j.LoggerFactory
 import spark.jobserver._
 import spark.jobserver.context.{JobLoadError, LoadingError, SparkContextFactory}
-import spark.jobserver.util.SparkJobUtils
+import spark.jobserver.util.{JobserverConfig, SparkJobUtils}
 
 import scala.collection.JavaConverters._
 import scala.util.{Failure, Success, Try}
@@ -58,19 +57,17 @@ trait PythonContextFactory extends SparkContextFactory {
     * the right type of job given the current context type.  For example, it may load a JAR
     * and validate the classpath exists and try to invoke its constructor.
     */
-  override def loadAndValidateJob(appName: String,
-                                  uploadTime: DateTime,
-                                  classPath: String,
+  override def loadAndValidateJob(classPath: Seq[String],
+                                  mainClass: String,
                                   jobCache: JobCache): J Or LoadingError = {
-    Try(jobCache.getPythonJob(appName, uploadTime, classPath)) match {
-      case Success(jobInfo) => Good(PythonJobContainer(buildJob(jobInfo.eggPath, classPath)))
-      case Failure(ex: Exception) => Bad(JobLoadError(ex))
-      case Failure(ex) => Bad(JobLoadError(new Exception(ex)))
+    Try(jobCache.getPythonJob(classPath, mainClass)) match {
+      case Success(jobInfo) => Good(PythonJobContainer(buildJob(jobInfo.packagePath, mainClass)))
+      case Failure(t) => Bad(JobLoadError(t))
     }
   }
 
-  def buildJob(eggPath: String, modulePath: String): PythonJob[C] =
-    PythonJob[C](eggPath, modulePath, py4JImports)
+  def buildJob(packagePath: String, modulePath: String): PythonJob[C] =
+    PythonJob[C](packagePath, modulePath, py4JImports)
 
   /**
     *
@@ -99,6 +96,8 @@ trait PythonContextFactory extends SparkContextFactory {
   protected def doMakeContext(sc: SparkContext,
                     contextConfig: Config,
                     contextName: String): C
+
+  override def runsPython: Boolean = true
 }
 
 object PythonContextFactory {
@@ -179,15 +178,21 @@ class PythonSessionContextFactory extends PythonContextFactory {
                            contextName: String): C = {
     val builder = SparkSession.builder().config(sparkConf.set("spark.yarn.isPython", "true"))
     builder.appName(contextName)
-    try {
-      builder.enableHiveSupport()
-    } catch {
-      case e: IllegalArgumentException => println(s"Hive support not enabled - ${e.getMessage()}")
-    }
+    setupHiveSupport(contextConfig, builder)
     val spark = builder.getOrCreate()
     for ((k, v) <- SparkJobUtils.getHadoopConfig(contextConfig))
       spark.sparkContext.hadoopConfiguration.set(k, v)
     context = PythonSessionContextLikeWrapper(spark, contextConfig)
     context
+  }
+
+  protected def setupHiveSupport(config: Config, builder: SparkSession.Builder) = {
+    if (config.getBoolean(JobserverConfig.IS_SPARK_SESSION_HIVE_ENABLED)) {
+      try {
+        builder.enableHiveSupport()
+      } catch {
+        case e: IllegalArgumentException => println(s"Hive support not enabled - ${e.getMessage()}")
+      }
+    }
   }
 }

@@ -3,17 +3,16 @@ package spark.jobserver.common.akka.web
 import java.util.concurrent.TimeUnit
 
 import akka.testkit.TestKit
-import org.scalatest.{Matchers, FunSpec}
-import spray.testkit.ScalatestRouteTest
-
-import spray.http.StatusCodes._
+import akka.http.scaladsl.testkit.ScalatestRouteTest
 import com.yammer.metrics.Metrics
 import com.yammer.metrics.core.Gauge
 import akka.actor.ActorSystem
+import akka.http.scaladsl.model.StatusCodes.OK
+import org.scalatest.funspec.AnyFunSpec
+import org.scalatest.matchers.should.Matchers
 
-class CommonRoutesSpec extends FunSpec with Matchers with ScalatestRouteTest with CommonRoutes {
+class CommonRoutesSpec extends AnyFunSpec with Matchers with ScalatestRouteTest with CommonRoutes {
   def actorRefFactory: ActorSystem = system
-
 
   val metricCounter = Metrics.newCounter(getClass, "test-counter")
   val metricMeter = Metrics.newMeter(getClass, "test-meter", "requests", TimeUnit.SECONDS)
@@ -31,9 +30,9 @@ class CommonRoutesSpec extends FunSpec with Matchers with ScalatestRouteTest wit
   val histMap = Map("type" -> "histogram", "median" -> 0.0, "p75" -> 0.0, "p95" -> 0.0,
     "p98" -> 0.0, "p99" -> 0.0, "p999" -> 0.0)
   val timerMap = Map("type" -> "timer", "rate" -> (meterMap - "type"),
-    "duration" -> (histMap ++ Map("units" -> "milliseconds") - "type"))
+    "duration" -> (histMap ++ Map("units" -> "milliseconds") ++ Map("mean" -> 0.0) - "type"))
 
-  override def afterAll():Unit = {
+  override def afterAll(): Unit = {
     TestKit.shutdownActorSystem(system)
   }
 

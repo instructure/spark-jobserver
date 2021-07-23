@@ -9,9 +9,8 @@ object Dependencies {
   lazy val yammerDeps = "com.yammer.metrics" % "metrics-core" % metrics
 
   lazy val miscDeps = Seq(
-    "org.scalactic" %% "scalactic" % scalatic,
-    "org.joda" % "joda-convert" % jodaConvert,
-    "joda-time" % "joda-time" % jodaTime
+    "org.scalactic" %% "scalactic" % scalactic,
+    "org.mockito" % "mockito-core" % mockito
   )
 
   lazy val akkaDeps = Seq(
@@ -19,34 +18,35 @@ object Dependencies {
     // to use this one
     "com.typesafe.akka" %% "akka-slf4j" % akka,
     "com.typesafe.akka" %% "akka-cluster" % akka exclude("com.typesafe.akka", "akka-remote"),
-    "io.spray" %% "spray-json" % sprayJson,
-    "io.spray" %% "spray-can" % spray,
-    "io.spray" %% "spray-caching" % spray,
-    "io.spray" %% "spray-routing-shapeless23" % "1.3.4",
-    "io.spray" %% "spray-client" % spray,
+    "com.typesafe.akka" %% "akka-cluster-tools" % akka,
+    "com.typesafe.akka" %% "akka-actor" % akka,
+
+    "com.typesafe.akka" %% "akka-http" % akkaHttp,
+    "com.typesafe.akka" %% "akka-http-core" % akkaHttp,
+    "com.typesafe.akka" %% "akka-http-caching" % akkaHttp,
+    "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttp,
+    "ch.megard" %% "akka-http-cors" % akkaHttpCors,
+    "org.slf4j" % "slf4j-log4j12" % slf4j,
     yammerDeps
   )
 
   lazy val sparkDeps = Seq(
-    "org.apache.spark" %% "spark-core" % spark % "provided" excludeAll(excludeNettyIo, excludeQQ),
-    // Force netty version.  This avoids some Spark netty dependency problem.
-    "io.netty" % "netty-all" % netty
+    "org.apache.spark" %% "spark-core" % spark % "provided" excludeAll excludeQQ
   )
 
   lazy val sparkExtraDeps = Seq(
-    "org.apache.derby" % "derby" % derby % Provided excludeAll(excludeNettyIo, excludeQQ),
-    "org.apache.hadoop" % "hadoop-client" % hadoop % Provided excludeAll(excludeNettyIo, excludeQQ),
-    "org.apache.spark" %% "spark-mllib" % spark % Provided excludeAll(excludeNettyIo, excludeQQ),
-    "org.apache.spark" %% "spark-sql" % spark % Provided excludeAll(excludeNettyIo, excludeQQ),
-    "org.apache.spark" %% "spark-streaming" % spark % Provided excludeAll(excludeNettyIo, excludeQQ),
+    "org.apache.derby" % "derby" % derby % Provided excludeAll excludeQQ,
+    "org.apache.hadoop" % "hadoop-client" % hadoop % Provided excludeAll excludeQQ,
+    "org.apache.spark" %% "spark-mllib" % spark % Provided excludeAll excludeQQ,
+    "org.apache.spark" %% "spark-sql" % spark % Provided excludeAll excludeQQ,
+    "org.apache.spark" %% "spark-streaming" % spark % Provided excludeAll excludeQQ,
     "org.apache.spark" %% "spark-hive" % spark % Provided excludeAll(
-      excludeNettyIo, excludeQQ, excludeScalaTest
+      excludeQQ, excludeScalaTest
       )
   )
 
   lazy val sparkPythonDeps = Seq(
-    "net.sf.py4j" % "py4j" % py4j,
-    "io.spray" %% "spray-json" % sprayJson % Test
+    "net.sf.py4j" % "py4j" % py4j
   ) ++ sparkExtraDeps
 
   lazy val slickDeps = Seq(
@@ -58,14 +58,27 @@ object Dependencies {
     "org.flywaydb" % "flyway-core" % flyway
   )
 
-
+  lazy val zookeeperDeps = Seq(
+    "org.apache.curator" % "apache-curator" % curator % Provided
+  )
 
   lazy val cassandraDeps = Seq(
-    "com.datastax.spark" %% "spark-cassandra-connector" % cassandraConnector
+    "com.datastax.spark" %% "spark-cassandra-connector" % cassandraConnector,
+
+    // The following dependency is not required by jobserver. It is required by
+    // C* connector (only if used with Hadoop 3.x). Once C* is compatible with
+    // hadoop, the following dependency should be removed.
+    // https://datastax-oss.atlassian.net/browse/SPARKC-566
+    "commons-configuration" % "commons-configuration" % commonConfigurations
   )
 
   lazy val logbackDeps = Seq(
     "ch.qos.logback" % "logback-classic" % logback
+  )
+
+  lazy val keycloakDeps = Seq(
+    "io.jsonwebtoken" % "jjwt" % jjwt excludeAll(excludeJackson),
+    "com.auth0" % "jwks-rsa" % jwksRsa excludeAll(excludeGuava, excludeJackson)
   )
 
   lazy val scalaTestDep = "org.scalatest" %% "scalatest" % scalaTest % Test
@@ -73,8 +86,23 @@ object Dependencies {
   lazy val coreTestDeps = Seq(
     scalaTestDep,
     "com.typesafe.akka" %% "akka-testkit" % akka % Test,
-    "io.spray" %% "spray-testkit" % spray % Test,
-    "org.cassandraunit" % "cassandra-unit" % cassandraUnit % Test
+    "com.typesafe.akka" %% "akka-multi-node-testkit" % akka % Test,
+    "com.typesafe.akka" %% "akka-stream-testkit" % akka,
+    "com.typesafe.akka" %% "akka-http-testkit" % akkaHttp
+  )
+
+  lazy val miscTestDeps = Seq(
+    "org.apache.hadoop" % "hadoop-hdfs" % hadoop % Test classifier "tests" excludeAll(excludeCurator),
+    "org.apache.hadoop" % "hadoop-common" % hadoop % Test classifier "tests" excludeAll(excludeCurator),
+    "org.apache.hadoop" % "hadoop-minicluster" % hadoop % Test excludeAll(excludeCurator),
+    "org.apache.curator" % "curator-test" % curatorTest % Test excludeAll(excludeGuava)
+  )
+
+  lazy val integrationTestDeps = Seq(
+    "com.typesafe" % "config" % typeSafeConfig,
+    "org.scalatest" %% "scalatest" % scalaTest,
+    "com.softwaremill.sttp" %% "core" % "1.6.3",
+    "com.typesafe.play" %% "play-json" % "2.7.4"
   )
 
   lazy val securityDeps = Seq(
@@ -85,8 +113,7 @@ object Dependencies {
   lazy val apiDeps = sparkDeps ++ miscDeps :+ typeSafeConfigDeps :+ scalaTestDep
 
   val repos = Seq(
-    "Typesafe Repo" at "http://repo.typesafe.com/typesafe/releases/",
+    "Typesafe Repo" at "https://repo.typesafe.com/typesafe/releases/",
     "sonatype snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/",
-    "spray repo" at "http://repo.spray.io"
   )
 }

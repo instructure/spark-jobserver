@@ -2,10 +2,13 @@ import sbt._
 
 object ExclusionRules {
   val excludeCglib = ExclusionRule(organization = "org.sonatype.sisu.inject")
-  val excludeJackson = ExclusionRule(organization = "org.codehaus.jackson")
+  val excludeJackson = ExclusionRule(organization = "com.fasterxml.jackson.core", name = "jackson-databind")
   val excludeScalaTest = ExclusionRule(organization = "org.scalatest")
   val excludeScala = ExclusionRule(organization = "org.scala-lang")
-  val excludeNettyIo = ExclusionRule(organization = "io.netty", artifact = "netty-all")
   val excludeAsm = ExclusionRule(organization = "asm")
   val excludeQQ = ExclusionRule(organization = "org.scalamacros")
+  val excludeJpountz = ExclusionRule(organization = "net.jpountz.lz4", name = "lz4")
+  val excludeZookeeper = ExclusionRule(organization = "org.apache.zookeeper", name = "zookeeper")
+  val excludeGuava = ExclusionRule(organization = "com.google.guava")
+  val excludeCurator = ExclusionRule(organization = "org.apache.curator")
 }

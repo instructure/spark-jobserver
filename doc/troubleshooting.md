@@ -1,3 +1,24 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Troubleshooting](#troubleshooting)
+  - [Tests don't pass or have timeouts](#tests-dont-pass-or-have-timeouts)
+  - [Requests are timing out](#requests-are-timing-out)
+  - [Timeout getting large job results](#timeout-getting-large-job-results)
+  - [Job with status finished has no result](#job-with-status-finished-has-no-result)
+  - [AskTimeout when starting job server or contexts](#asktimeout-when-starting-job-server-or-contexts)
+  - [Job server won't start / cannot bind to 0.0.0.0:8090](#job-server-wont-start--cannot-bind-to-00008090)
+  - [Job Server Doesn't Connect to Spark Cluster](#job-server-doesnt-connect-to-spark-cluster)
+  - [Exception in thread "main" java.lang.NoSuchMethodError: akka.actor.ActorRefFactory.dispatcher()Lscala/concurrent/ExecutionContextExecutor;](#exception-in-thread-main-javalangnosuchmethoderror-akkaactoractorreffactorydispatcherlscalaconcurrentexecutioncontextexecutor)
+  - [I am running CDH 5.3 and Job Server doesn't work](#i-am-running-cdh-53-and-job-server-doesnt-work)
+  - [I want to run job-server on Windows](#i-want-to-run-job-server-on-windows)
+  - [Akka Deadletters / Workers disconnect from Job Server](#akka-deadletters--workers-disconnect-from-job-server)
+  - [java.lang.ClassNotFoundException when staring spark-jobserver from sbt](#javalangclassnotfoundexception-when-staring-spark-jobserver-from-sbt)
+  - [Accessing a config file in my job jar](#accessing-a-config-file-in-my-job-jar)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Troubleshooting
 
 ## Tests don't pass or have timeouts
@@ -16,10 +37,10 @@ send timeout param along with your request (in secs). eg below.
 http://devsparkcluster.cloudapp.net/jobs?appName=job-server-tests&classPath=spark.jobserver.WordCountExample&sync=true&timeout=20
 ```
 
-You may need to adjust Spray's default request timeout and idle timeout, which are by default 40 secs and 60 secs.  To do this, modify the configuration file in your deployed job server, adding a section like the following:
+You may need to adjust Akka HTTP's default request timeout and idle timeout, which are by default 40 secs and 60 secs.  To do this, modify the configuration file in your deployed job server, adding a section like the following:
 
 ```
-spray.can.server {
+akka.http.server {
   idle-timeout = 210 s
   request-timeout = 200 s
 }
@@ -27,7 +48,7 @@ spray.can.server {
 
 Then simply restart the job server.
 
-Note that the idle-timeout must be higher than request-timeout, or Spray and the job server won't start.
+Note that the idle-timeout must be higher than request-timeout, or Akka HTTP and the job server won't start.
 
 ## Timeout getting large job results
 
@@ -76,15 +97,6 @@ after this fixed, I can run jobs submitted from a remote job server successfully
 If you are running CDH 5.3 or older, you may have an incompatible version of Akka bundled together.  :(  Fortunately, one of our users has put together a [branch that works](https://github.com/bjoernlohrmann/spark-jobserver/tree/cdh-5.3) ... try that out!
 
 (Older instructions) Try modifying the version of Akka included with spark-jobserver to match the one in CDH (2.2.4, I think), or upgrade to CDH 5.4.   If you are on CDH 5.4, check that `sparkVersion` in `Dependencies.scala` matches CDH.  Or see [isse #154](https://github.com/spark-jobserver/spark-jobserver/issues/154).
-
-## java.lang.NoSuchMethodError: org.joda.time.DateTime.now()
-
-This time the problem is caused by incompatible class versions of the joda.time package in Hive and the Spark Job Server on Cloudera (java.lang.NoSuchMethodError: org.joda.time.DateTime.now()Lorg/joda/time/DateTime exception in the spark job server log). To solve the problem execute the following two commands on the machine the Job Server is installed:
-
-    sed -i -e 's#--driver-class-path.*SPARK_HOME/../hive/lib/.*##' /opt/spark-job-server/manager_start.sh
-    sed -i -e 's#--driver-class-path.*SPARK_HOME/../hive/lib/.*##' /opt/spark-job-server/server_start.sh  
-
-This removes the problematic driver class path entries from the two spark job server scripts.  (from @koetter)
 
 ## I am running CDH 5.3 and Job Server doesn't work
 
